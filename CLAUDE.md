@@ -28,20 +28,19 @@ pytest tests/test_<module>.py -v
 pytest tests/test_<module>.py::test_function_name -v
 ```
 
-## Architecture
+## Intended Architecture
 
-```
-app.py                  # Streamlit UI — collects upload, calls pipeline, renders report
-src/
-  analysis/             # Deterministic image analysers (composition, colour, exposure)
-  models/               # DL model loaders/inference wrappers (CLIP, BLIP, etc.)
-  llm/                  # Anthropic API client + prompt builders
-  utils/                # Image I/O, resizing, shared helpers
-prompts/                # Plain-text or Jinja2 prompt templates for LLM calls
-tests/                  # Mirrors src/ structure; use pytest
-```
+Directories are added incrementally as code is written. Planned layout:
 
-**Data flow:** `app.py` → `src/analysis/` (structured metrics) + `src/models/` (embeddings/captions) → `src/llm/` (Claude API, uses `prompts/`) → rendered Streamlit output.
+- `app.py` — Streamlit entry point
+- `src/analysis/` — deterministic image analysers (composition, colour, exposure)
+- `src/models/` — DL model loaders/inference wrappers (CLIP, BLIP, etc.)
+- `src/llm/` — Anthropic API client + prompt builders
+- `src/utils/` — image I/O, resizing, shared helpers
+- `prompts/` — LLM prompt templates
+- `tests/` — mirrors `src/` structure; use pytest
+
+**Intended data flow:** `app.py` → `src/analysis/` + `src/models/` → `src/llm/` → rendered Streamlit output.
 
 ## Key conventions
 
