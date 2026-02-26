@@ -28,9 +28,21 @@ pytest tests/test_<module>.py -v
 pytest tests/test_<module>.py::test_function_name -v
 ```
 
-## Intended Architecture
+## Current Repo Structure
 
-Directories are added incrementally as code is written. Planned layout:
+Directories are created incrementally as code is written. Only root-level config files exist right now:
+
+```
+image-analysis/
+├── requirements.txt
+├── .env.example
+├── CLAUDE.md
+└── README.md
+```
+
+## Planned Architecture
+
+As code is written, the intended layout is:
 
 - `app.py` — Streamlit entry point
 - `src/analysis/` — deterministic image analysers (composition, colour, exposure)
@@ -46,6 +58,5 @@ Directories are added incrementally as code is written. Planned layout:
 
 - All API keys are loaded from `.env` via `python-dotenv`; never hard-code them.
 - `uploads/` is gitignored — never commit user images.
-- Model weights are downloaded at runtime; the `models/` directory holds configs only.
+- Model weights are downloaded at runtime; never commit weight files.
 - The LLM model to use is controlled by the `LLM_MODEL` env var (default: `claude-opus-4-6`).
-- Use `src/__init__.py` to expose clean public interfaces from each sub-package.

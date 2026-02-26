@@ -23,27 +23,34 @@ An AI-powered tool that analyses photographs for composition, aesthetics, and te
 
 ## Project Structure
 
+Directories are created incrementally as code is written. Current state:
+
 ```
 image-analysis/
+├── requirements.txt
+├── .env.example
+├── CLAUDE.md
+└── README.md
+```
+
+Planned additions as development progresses:
+
+```
 ├── app.py                  # Streamlit entry point
 ├── src/
 │   ├── analysis/           # Composition, colour, and technical analysers
 │   ├── llm/                # LLM prompt builders and API clients
 │   ├── models/             # DL model loaders and inference
-│   └── utils/              # Shared helpers (image I/O, formatting, etc.)
-├── assets/                 # Static assets (logo, sample images)
-├── models/                 # Model config (weights downloaded at runtime — gitignored)
+│   └── utils/              # Shared helpers
 ├── prompts/                # LLM prompt templates
-├── tests/                  # Unit and integration tests
-├── requirements.txt
-└── .env.example
+└── tests/                  # Unit and integration tests
 ```
 
 ## Setup
 
 ```bash
 # 1. Clone the repo
-git clone <repo-url>
+git clone https://github.com/dhruv-doshi/image-analysis.git
 cd image-analysis
 
 # 2. Create and activate a virtual environment
