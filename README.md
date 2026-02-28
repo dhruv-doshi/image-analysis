@@ -33,19 +33,6 @@ image-analysis/
 └── README.md
 ```
 
-Planned additions as development progresses:
-
-```
-├── app.py                  # Streamlit entry point
-├── src/
-│   ├── analysis/           # Composition, colour, and technical analysers
-│   ├── llm/                # LLM prompt builders and API clients
-│   ├── models/             # DL model loaders and inference
-│   └── utils/              # Shared helpers
-├── prompts/                # LLM prompt templates
-└── tests/                  # Unit and integration tests
-```
-
 ## Setup
 
 ```bash
