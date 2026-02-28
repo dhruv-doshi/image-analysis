@@ -14,5 +14,8 @@ pyiqa>=0.1.12
 # Data models
 pydantic>=2.0.0
 
+# Composition / saliency
+rembg>=2.0.50
+
 # Config
 python-dotenv>=1.0.0
