@@ -150,7 +150,8 @@ class TestOutputType:
         from src.models import CompositionScores
 
         sys.modules["rembg"].remove.return_value = centre_mask
-        result = comp.analyse(blank_bgr)
+        pil = Image.fromarray(np.zeros((100, 100, 3), dtype=np.uint8))
+        result = comp.analyse(blank_bgr, pil)
         assert isinstance(result, CompositionScores)
 
 
@@ -300,7 +301,8 @@ def test_analyse_smoke(mask_fixture, bgr_fixture, request):
     bgr  = request.getfixturevalue(bgr_fixture)
 
     sys.modules["rembg"].remove.return_value = mask
-    result = comp.analyse(bgr)
+    pil = Image.fromarray(np.zeros((bgr.shape[0], bgr.shape[1], 3), dtype=np.uint8))
+    result = comp.analyse(bgr, pil)
 
     assert isinstance(result, CompositionScores)
     # Structural invariants — verify shape and valid ranges
