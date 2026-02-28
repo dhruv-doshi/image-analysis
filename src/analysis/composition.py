@@ -97,7 +97,7 @@ def _visual_weight(saliency: np.ndarray) -> tuple[dict, float]:
     }
     total = saliency.sum()
     if total == 0:
-        return {k: 0.25 for k in quadrants}, 1.0
+        return dict.fromkeys(quadrants, 0.25), 1.0
     weights = {k: float(q.sum() / total) for k, q in quadrants.items()}
     vals = list(weights.values())
     min_w, max_w = min(vals), max(vals)

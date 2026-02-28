@@ -13,7 +13,6 @@ from src.llm.synthesizer import synthesise
 from src.models import AnalysisFeature, AnalysisReport
 from src.utils.loader import extract_exif, load_image
 
-
 st.set_page_config(page_title="FrameIQ", layout="wide")
 
 st.title("FrameIQ")
@@ -73,7 +72,7 @@ if uploaded_file is not None:
 
     if exif_fields:
         cols = st.columns(len(exif_fields))
-        for col, (label, value) in zip(cols, exif_fields):
+        for col, (label, value) in zip(cols, exif_fields, strict=False):
             col.metric(label, value)
 
     if exif.image_width is not None and exif.image_height is not None:

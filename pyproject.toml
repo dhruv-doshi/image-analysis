@@ -12,6 +12,11 @@ target-version = "py311"
 line-length = 100
 src = ["src"]
 
+[tool.ruff.lint.per-file-ignores]
+# load_dotenv() must run before local src imports so LLM_MODEL env var is
+# available at module-import time (client.py reads it at the module level).
+"app.py" = ["E402"]
+
 [tool.ruff.lint]
 select = [
     "E",   # pycodestyle errors
@@ -80,4 +85,5 @@ skips = [
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+pythonpath = ["."]
 addopts = "-v --tb=short"
