@@ -1,0 +1,83 @@
+# ============================================================
+# pyproject.toml — single source of truth for all tool config
+# ============================================================
+# Tools covered: ruff (lint + format), mypy, bandit, pytest
+# Do NOT add separate .flake8 / mypy.ini / setup.cfg files.
+
+# ---------------------------------------------------------------------------
+# Ruff — replaces black + isort + flake8 (do NOT install those separately)
+# ---------------------------------------------------------------------------
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+src = ["src"]
+
+[tool.ruff.lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "B",   # flake8-bugbear
+    "C4",  # flake8-comprehensions
+    "UP",  # pyupgrade
+    "N",   # pep8-naming
+    "SIM", # flake8-simplify
+]
+ignore = [
+    "E501",  # line too long — handled by the formatter, not the linter
+    "B008",  # do not perform function calls in default args — conflicts with
+             # Streamlit patterns such as st.file_uploader(...) in function sigs
+]
+
+[tool.ruff.lint.isort]
+known-first-party = ["src"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+
+# ---------------------------------------------------------------------------
+# Mypy — selective strict mode
+# ---------------------------------------------------------------------------
+[tool.mypy]
+python_version = "3.11"
+strict = false              # do not enable strict wholesale; selectively below
+
+warn_return_any = true
+warn_unused_ignores = true
+warn_redundant_casts = true
+disallow_untyped_defs = true        # all functions must have type annotations
+disallow_incomplete_defs = true
+check_untyped_defs = true
+no_implicit_optional = true
+
+# Third-party stubs are often absent (torch, torchvision, cv2, pyiqa, open-clip).
+# Suppressing import errors here avoids noise without hiding real type bugs.
+ignore_missing_imports = true
+
+[[tool.mypy.overrides]]
+# app.py is Streamlit glue code — top-level imperative style without typed
+# function boundaries. Relax the untyped-defs rule only here.
+module = ["app"]
+disallow_untyped_defs = false
+
+# ---------------------------------------------------------------------------
+# Bandit — security scanning
+# ---------------------------------------------------------------------------
+[tool.bandit]
+targets = ["src", "app.py"]
+skips = [
+    # B101: assert statements are flagged by bandit as a security risk in
+    # production code. We suppress it here because assert is used in the test
+    # suite (tests/ directory) and in internal sanity checks — not in
+    # user-facing code paths that can be optimised away with -O.
+    "B101",
+]
+
+# ---------------------------------------------------------------------------
+# Pytest — test runner settings
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
