@@ -110,13 +110,19 @@ def _visual_weight(saliency: np.ndarray) -> tuple[dict, float]:
 # ---------------------------------------------------------------------------
 
 def _ncc(a: np.ndarray, b: np.ndarray) -> float:
-    """Normalised cross-correlation in [-1, 1]. Returns 0.0 if either std is zero."""
+    """Normalised cross-correlation in [-1, 1].
+
+    Returns 1.0 when both arrays are constant (identical flat signals are
+    perfectly correlated). Returns 0.0 when only one side is constant.
+    """
     a_std, b_std = float(a.std()), float(b.std())
+    if a_std == 0 and b_std == 0:
+        return 1.0
     if a_std == 0 or b_std == 0:
         return 0.0
     a_norm = (a - a.mean()) / a_std
     b_norm = (b - b.mean()) / b_std
-    return float(np.mean(a_norm * b_norm))
+    return float(np.clip(np.mean(a_norm * b_norm), -1.0, 1.0))
 
 
 def _symmetry(saliency: np.ndarray) -> tuple[float, float]:
