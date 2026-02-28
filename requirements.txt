@@ -6,6 +6,7 @@ Pillow>=10.3.0
 numpy>=1.24.0
 opencv-python-headless>=4.8.0
 scikit-image>=0.21.0
+PyWavelets>=1.4.0
 
 # IQA / deep learning
 pyiqa>=0.1.12
