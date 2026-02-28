@@ -3,6 +3,9 @@ import io
 import math
 
 import streamlit as st
+from dotenv import load_dotenv
+
+load_dotenv()
 
 from src.analysis.composition import analyse as analyse_composition
 from src.analysis.technical import analyse as analyse_technical

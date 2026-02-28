@@ -184,18 +184,38 @@ def synthesise(
 
     response = client.messages.create(
         model=_MODEL,
-        max_tokens=2048,
+        max_tokens=4096,
         system=_SYSTEM_PROMPT,
         messages=[{"role": "user", "content": user_message}],
     )
 
-    raw_text: str = response.content[0].text
-    logger.debug("Claude responded with %d chars", len(raw_text))
+    raw_text: str = response.content[0].text.strip()
+    logger.debug(
+        "Claude responded with %d chars (stop_reason=%s)",
+        len(raw_text),
+        response.stop_reason,
+    )
+
+    # Strip markdown code fences if Claude wrapped the JSON
+    if raw_text.startswith("```"):
+        raw_text = raw_text.split("\n", 1)[-1]  # drop opening fence line
+        raw_text = raw_text.rsplit("```", 1)[0].strip()  # drop closing fence
+
+    if not raw_text:
+        raise ValueError(
+            f"Claude returned an empty response (stop_reason={response.stop_reason})"
+        )
 
     try:
         data = json.loads(raw_text)
     except json.JSONDecodeError:
-        logger.error("Claude returned non-JSON: %.200s", raw_text)
+        logger.error("Claude returned non-JSON: %.400s", raw_text)
         raise
+
+    # Claude occasionally returns list values for string fields; join them.
+    for key in ("summary", "composition", "aesthetics", "technical",
+                "improvements", "editing", "inspiration"):
+        if isinstance(data.get(key), list):
+            data[key] = "\n".join(str(item) for item in data[key])
 
     return AnalysisReport(**data)
