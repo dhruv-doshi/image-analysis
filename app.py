@@ -6,6 +6,8 @@ import streamlit as st
 
 from src.analysis.composition import analyse as analyse_composition
 from src.analysis.technical import analyse as analyse_technical
+from src.llm.synthesizer import synthesise
+from src.models import AnalysisFeature, AnalysisReport
 from src.utils.loader import extract_exif, load_image
 
 
@@ -158,6 +160,34 @@ if uploaded_file is not None:
     c1.metric("Line Pattern", comp.line_pattern.title())
     c2.metric("Lines Detected", str(len(comp.dominant_line_angles)))
     c3.metric("Converges to Subject", "Yes" if comp.leading_lines_converge_to_subject else "No")
+
+    st.divider()
+
+    # --- Layer 3: AI Analysis ---
+    st.subheader("AI Analysis")
+    features = AnalysisFeature.FULL  # expose as multiselect in a later iteration
+    with st.spinner("Generating critique…"):
+        report: AnalysisReport = synthesise(scores, comp, exif, features)
+
+    st.markdown(f"**Summary**\n\n{report.summary}")
+    if report.composition:
+        with st.expander("Composition"):
+            st.markdown(report.composition)
+    if report.aesthetics:
+        with st.expander("Aesthetics"):
+            st.markdown(report.aesthetics)
+    if report.technical:
+        with st.expander("Technical Quality"):
+            st.markdown(report.technical)
+    if report.improvements:
+        with st.expander("Improvement Tips"):
+            st.markdown(report.improvements)
+    if report.editing:
+        with st.expander("Editing Tips"):
+            st.markdown(report.editing)
+    if report.inspiration:
+        with st.expander("Inspiration"):
+            st.markdown(report.inspiration)
 
 else:
     st.info("No image uploaded yet. Use the uploader above to select a JPEG file.")

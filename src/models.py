@@ -58,3 +58,13 @@ class CompositionScores(BaseModel):
     dominant_line_angles: list[float]    # degrees, from HoughLinesP
     leading_lines_converge_to_subject: bool
     line_pattern: str                    # "diagonal"|"horizontal"|"vertical"|"mixed"|"none"
+
+
+class AnalysisReport(BaseModel):
+    summary: str                    # always present; 2-3 sentence overall assessment
+    composition: str | None = None  # AnalysisFeature.COMPOSITION
+    aesthetics: str | None = None   # AnalysisFeature.AESTHETICS
+    technical: str | None = None    # AnalysisFeature.TECHNICAL
+    improvements: str | None = None # AnalysisFeature.IMPROVEMENTS
+    editing: str | None = None      # AnalysisFeature.EDITING
+    inspiration: str | None = None  # AnalysisFeature.INSPIRATION

@@ -17,5 +17,8 @@ pydantic>=2.0.0
 # Composition / saliency
 rembg>=2.0.50
 
+# LLM
+anthropic>=0.40.0
+
 # Config
 python-dotenv>=1.0.0
