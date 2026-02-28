@@ -1,35 +1,48 @@
 from __future__ import annotations
 
+from pathlib import Path
+from typing import IO
+
 import numpy as np
-import torchvision.transforms as T
-from PIL import Image, ExifTags
+import torch
+from PIL import ExifTags, Image
+import torchvision.transforms as transforms  # type: ignore[import-untyped]
 
 from src.models import ExifData
 
 
-def load_image(source) -> tuple[Image.Image, np.ndarray, object]:
+def load_image(
+    source: str | Path | IO[bytes],
+) -> tuple[Image.Image, np.ndarray, torch.Tensor]:
     """
-    source: file path (str) or file-like object (e.g. Streamlit UploadedFile).
+    source: file path (str / Path) or file-like object (e.g. Streamlit UploadedFile).
     Returns:
         pil_image  — RGB PIL Image at original resolution
         bgr_array  — uint8 numpy array in BGR order (for OpenCV)
         tensor     — float32 (1, 3, H, W) tensor in [0, 1] (for pyiqa)
     """
-    pil_image = Image.open(source).convert("RGB")
+    img = Image.open(source)
+    exif_bytes = img.info.get("exif", b"")
+    pil_image = img.convert("RGB")
+    if exif_bytes:
+        pil_image.info["exif"] = exif_bytes
     rgb_array = np.array(pil_image)
     bgr_array = rgb_array[:, :, ::-1].copy()
-    tensor = T.ToTensor()(pil_image).unsqueeze(0)
+    tensor = transforms.ToTensor()(pil_image).unsqueeze(0)
     return pil_image, bgr_array, tensor
 
 
 def extract_exif(pil_image: Image.Image) -> ExifData:
     """Pull EXIF tags from a PIL Image. Returns ExifData with None for missing fields."""
-    raw  = pil_image._getexif() or {}  # noqa: SLF001
+    try:
+        raw = dict(pil_image.getexif())
+    except Exception:
+        raw = {}
     tags = {ExifTags.TAGS.get(k, k): v for k, v in raw.items()}
 
-    def to_float(r):
+    def to_float(r: object) -> float | None:
         try:
-            return float(r)
+            return float(r)  # type: ignore[arg-type]
         except Exception:
             return None
 

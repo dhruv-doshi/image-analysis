@@ -1,11 +1,13 @@
 from __future__ import annotations
 
-import math
 import logging
+import math
+from typing import Any
 
 import cv2
 import numpy as np
-import pyiqa
+import pyiqa  # type: ignore[import-untyped]
+import torch
 from skimage.restoration import estimate_sigma
 
 from src.models import TechnicalScores
@@ -17,22 +19,24 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 _DEVICE = "cpu"
 
-def _load(name: str):
+
+def _load(name: str) -> Any | None:
     try:
         return pyiqa.create_metric(name, device=_DEVICE)
     except Exception as exc:
         logger.warning("Could not load pyiqa metric %r: %s", name, exc)
         return None
 
-_brisque  = _load("brisque")
-_nima     = _load("nima")
+
+_brisque = _load("brisque")
+_nima = _load("nima")
 _clip_iqa = _load("clipiqa+")
 
 
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
-def analyse(bgr_array: np.ndarray, tensor) -> TechnicalScores:
+def analyse(bgr_array: np.ndarray, tensor: torch.Tensor) -> TechnicalScores:
     """
     Run all Layer-1 metrics on a single image.
 
@@ -61,7 +65,7 @@ def analyse(bgr_array: np.ndarray, tensor) -> TechnicalScores:
 # ---------------------------------------------------------------------------
 # Sub-components — pyiqa (Sub-component A)
 # ---------------------------------------------------------------------------
-def _score_brisque(tensor) -> float:
+def _score_brisque(tensor: torch.Tensor) -> float:
     if _brisque is None:
         return float("nan")
     try:
@@ -71,7 +75,7 @@ def _score_brisque(tensor) -> float:
         return float("nan")
 
 
-def _score_nima(tensor) -> float | None:
+def _score_nima(tensor: torch.Tensor) -> float | None:
     if _nima is None:
         return None
     try:
@@ -81,7 +85,7 @@ def _score_nima(tensor) -> float | None:
         return None
 
 
-def _score_clip_iqa(tensor) -> float | None:
+def _score_clip_iqa(tensor: torch.Tensor) -> float | None:
     if _clip_iqa is None:
         return None
     try:
@@ -95,22 +99,19 @@ def _score_clip_iqa(tensor) -> float | None:
 # Sub-components — Classical CV (Sub-component B)
 # ---------------------------------------------------------------------------
 def _sharpness_global(gray: np.ndarray) -> float:
-    return float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    return float(cv2.Laplacian(gray, cv2.CV_32F).var())
 
 
 def _sharpness_regional(gray: np.ndarray) -> dict:
     h, w = gray.shape
     mh, mw = h // 2, w // 2
     quadrants = {
-        "top_left":     gray[:mh, :mw],
-        "top_right":    gray[:mh, mw:],
-        "bottom_left":  gray[mh:, :mw],
+        "top_left": gray[:mh, :mw],
+        "top_right": gray[:mh, mw:],
+        "bottom_left": gray[mh:, :mw],
         "bottom_right": gray[mh:, mw:],
     }
-    return {
-        k: float(cv2.Laplacian(q, cv2.CV_64F).var())
-        for k, q in quadrants.items()
-    }
+    return {k: float(cv2.Laplacian(q, cv2.CV_32F).var()) for k, q in quadrants.items()}
 
 
 def _noise(bgr_array: np.ndarray) -> float:
@@ -122,17 +123,17 @@ def _noise(bgr_array: np.ndarray) -> float:
 def _exposure(gray: np.ndarray) -> dict:
     total = gray.size
     highlights_pct = float(np.sum(gray >= 250) / total * 100)
-    shadows_pct    = float(np.sum(gray <= 5)   / total * 100)
+    shadows_pct = float(np.sum(gray <= 5) / total * 100)
     return {
         "exposure_clipped_highlights_pct": highlights_pct,
-        "exposure_clipped_shadows_pct":    shadows_pct,
-        "histogram_mean":                  float(gray.mean()),
-        "histogram_std":                   float(gray.std()),
+        "exposure_clipped_shadows_pct": shadows_pct,
+        "histogram_mean": float(gray.mean()),
+        "histogram_std": float(gray.std()),
     }
 
 
 def _dynamic_range(gray: np.ndarray) -> float:
-    p1  = float(np.percentile(gray, 1))
+    p1 = float(np.percentile(gray, 1))
     p99 = float(np.percentile(gray, 99))
     if p1 <= 0:
         return 0.0
