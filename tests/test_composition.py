@@ -225,9 +225,11 @@ class TestSymmetry:
 
     def test_solid_grey_is_perfectly_symmetric(self, blank_bgr):
         """A solid-grey image is trivially LR- and TB-symmetric."""
+        import cv2  # noqa: PLC0415
         import src.analysis.composition as comp
 
-        h_sym, v_sym = comp._symmetry(blank_bgr)
+        gray = cv2.cvtColor(blank_bgr, cv2.COLOR_BGR2GRAY).astype(np.float64)
+        h_sym, v_sym = comp._symmetry(gray)
         assert h_sym == pytest.approx(1.0, abs=0.05), (
             f"Solid-grey image should have horizontal symmetry ≈ 1.0; got {h_sym:.4f}"
         )
@@ -236,9 +238,11 @@ class TestSymmetry:
         )
 
     def test_symmetry_scores_are_bounded(self, blank_bgr):
+        import cv2  # noqa: PLC0415
         import src.analysis.composition as comp
 
-        h_sym, v_sym = comp._symmetry(blank_bgr)
+        gray = cv2.cvtColor(blank_bgr, cv2.COLOR_BGR2GRAY).astype(np.float64)
+        h_sym, v_sym = comp._symmetry(gray)
         assert 0.0 <= h_sym <= 1.0
         assert 0.0 <= v_sym <= 1.0
 
@@ -249,7 +253,7 @@ class TestLeadingLines:
     def test_blank_image_no_dominant_lines(self, blank_bgr):
         import src.analysis.composition as comp
 
-        angles, converges, pattern = comp._leading_lines(blank_bgr)
+        angles, converges, pattern = comp._leading_lines(blank_bgr, 0.5, 0.5)
         # Solid-grey has no edges; we expect either no angles or "none" pattern
         assert pattern == "none" or len(angles) == 0, (
             f"Solid-grey image should yield no meaningful lines; "
@@ -259,7 +263,7 @@ class TestLeadingLines:
     def test_checkerboard_returns_correct_types(self, checkerboard_bgr):
         import src.analysis.composition as comp
 
-        angles, converges, pattern = comp._leading_lines(checkerboard_bgr)
+        angles, converges, pattern = comp._leading_lines(checkerboard_bgr, 0.5, 0.5)
         assert isinstance(angles, list), "angles must be a list"
         assert all(isinstance(a, float) for a in angles), (
             "every angle must be a float"
