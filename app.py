@@ -1,8 +1,10 @@
 import hashlib
 import io
+import math
 
 import streamlit as st
 
+from src.analysis.composition import analyse as analyse_composition
 from src.analysis.technical import analyse as analyse_technical
 from src.utils.loader import extract_exif, load_image
 
@@ -24,16 +26,20 @@ if uploaded_file is not None:
         with st.spinner("Analysing technical quality…"):
             exif = extract_exif(pil_image)
             scores = analyse_technical(bgr_array, tensor)
+        with st.spinner("Analysing composition…"):
+            comp = analyse_composition(bgr_array, pil_image)
         st.session_state.update({
             "file_hash": file_hash,
             "pil_image": pil_image,
             "exif": exif,
             "scores": scores,
+            "comp": comp,
         })
 
     pil_image = st.session_state["pil_image"]
     exif = st.session_state["exif"]
     scores = st.session_state["scores"]
+    comp = st.session_state["comp"]
 
     with st.expander("Uploaded Image", expanded=False):
         st.markdown(
@@ -111,6 +117,47 @@ if uploaded_file is not None:
     c1, c2 = st.columns(2)
     c1.metric("Dynamic Range", f"{scores.dynamic_range_stops:.1f} stops", help="log₂(p99/p1)")
     c2.metric("Contrast RMS", f"{scores.contrast_rms:.3f}", help="std / mean of grayscale")
+
+    st.divider()
+
+    # --- Composition Scores ---
+    st.subheader("Composition Analysis")
+
+    # Row 1 — Subject Position
+    st.markdown("**Subject Position**")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Centroid X", f"{comp.saliency_centroid_x:.3f}", help="0=left · 1=right")
+    c2.metric("Centroid Y", f"{comp.saliency_centroid_y:.3f}", help="0=top · 1=bottom")
+    c3.metric("Best Alignment", comp.best_alignment.replace("_", " ").title())
+
+    st.divider()
+
+    # Row 2 — Alignment Scores
+    st.markdown("**Alignment Scores**")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Rule of Thirds", f"{comp.rot_alignment_score:.3f}", help="0=perfect · 1=worst")
+    c2.metric("Golden Ratio", f"{comp.golden_ratio_alignment_score:.3f}", help="0=perfect · 1=worst")
+    c3.metric("Negative Space", f"{comp.negative_space_ratio:.1%}", help="Fraction of non-salient pixels")
+
+    st.divider()
+
+    # Row 3 — Balance & Symmetry
+    st.markdown("**Balance & Symmetry**")
+    c1, c2, c3 = st.columns(3)
+    balance = comp.visual_weight_balance
+    balance_str = f"{balance:.2f}×" if math.isfinite(balance) else "∞"
+    c1.metric("Visual Balance", balance_str, help="1.0=balanced · higher=unbalanced")
+    c2.metric("Horizontal Symmetry", f"{comp.symmetry_horizontal:.3f}", help="NCC left↔right · 1.0=symmetric")
+    c3.metric("Vertical Symmetry", f"{comp.symmetry_vertical:.3f}", help="NCC top↔bottom · 1.0=symmetric")
+
+    st.divider()
+
+    # Row 4 — Leading Lines
+    st.markdown("**Leading Lines**")
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Line Pattern", comp.line_pattern.title())
+    c2.metric("Lines Detected", str(len(comp.dominant_line_angles)))
+    c3.metric("Converges to Subject", "Yes" if comp.leading_lines_converge_to_subject else "No")
 
 else:
     st.info("No image uploaded yet. Use the uploader above to select a JPEG file.")
