@@ -4,7 +4,7 @@ import os
 
 from anthropic import Anthropic
 
-_MODEL: str = os.getenv("LLM_MODEL", "claude-opus-4-6")
+_MODEL: str = os.getenv("LLM_MODEL", "claude-haiku-4-5-20251001")
 
 
 def get_client() -> Anthropic:
