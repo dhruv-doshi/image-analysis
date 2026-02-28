@@ -34,9 +34,7 @@ class TechnicalScores(BaseModel):
     clip_iqa: float | None = None  # 0-1, higher = better
     # Classical CV
     sharpness_laplacian: float  # variance of Laplacian; higher = sharper
-    sharpness_regional: (
-        dict  # per-quadrant {top_left, top_right, bottom_left, bottom_right}
-    )
+    sharpness_regional: dict  # per-quadrant {top_left, top_right, bottom_left, bottom_right}
     noise_sigma: float  # estimated Gaussian noise std dev
     exposure_clipped_highlights_pct: float  # % pixels near 255
     exposure_clipped_shadows_pct: float  # % pixels near 0

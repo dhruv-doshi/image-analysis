@@ -5,8 +5,8 @@ from typing import IO
 
 import numpy as np
 import torch
+import torchvision.transforms as transforms
 from PIL import ExifTags, Image
-import torchvision.transforms as transforms  # type: ignore[import-untyped]
 
 from src.models import ExifData
 

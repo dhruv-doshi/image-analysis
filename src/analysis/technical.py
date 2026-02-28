@@ -6,7 +6,7 @@ from typing import Any
 
 import cv2
 import numpy as np
-import pyiqa  # type: ignore[import-untyped]
+import pyiqa
 import torch
 from skimage.restoration import estimate_sigma
 
@@ -111,7 +111,10 @@ def _sharpness_regional(gray: np.ndarray) -> dict:
         "bottom_left": gray[mh:, :mw],
         "bottom_right": gray[mh:, mw:],
     }
-    return {k: float(cv2.Laplacian(q, cv2.CV_32F).var()) for k, q in quadrants.items()}
+    return {
+        k: float(cv2.Laplacian(q, cv2.CV_32F).var()) if q.size > 0 else 0.0
+        for k, q in quadrants.items()
+    }
 
 
 def _noise(bgr_array: np.ndarray) -> float:
