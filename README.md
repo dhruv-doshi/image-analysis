@@ -1,15 +1,13 @@
-# FrameIQ — AI Image Analysis Tool
+# FrameIQ — AI Photo Analysis
 
-An AI-powered tool that analyses photographs for composition, aesthetics, and technical quality — then provides actionable improvement tips and contextual inspiration including similar work by renowned photographers.
+An AI-powered Streamlit app that analyses uploaded photographs for composition, technical quality, and aesthetics — then returns a structured natural-language critique with improvement tips and photographer inspiration.
 
 ## Features
 
-- **Composition Analysis** — rule of thirds, leading lines, symmetry, balance, framing
-- **Aesthetic Scoring** — colour harmony, contrast, tone, mood
-- **Technical Assessment** — exposure, sharpness, depth of field, noise
-- **Improvement Tips** — specific, actionable suggestions for each weakness identified
-- **Photographer Recommendations** — famous photographers whose style matches the uploaded image
-- **Similar Style Examples** — genre, era, and movement context
+- **Composition Analysis** — Rule of Thirds / Golden Ratio alignment, leading lines, symmetry, visual weight, negative space (powered by U²-Net saliency via rembg)
+- **Technical Assessment** — sharpness, noise, exposure clipping, dynamic range, contrast (BRISQUE, NIMA, CLIP-IQA+)
+- **AI Critique** — natural-language report from Claude covering composition, aesthetics, technical quality, editing tips, and photographer inspiration
+- **EXIF Display** — camera, lens, ISO, shutter speed, aperture, focal length
 
 ## Tech Stack
 
@@ -17,44 +15,96 @@ An AI-powered tool that analyses photographs for composition, aesthetics, and te
 |---|---|
 | UI | Streamlit |
 | Language | Python 3.11+ |
-| Vision Models | PyTorch / HuggingFace (CLIP, BLIP, etc.) |
-| LLM Analysis | Anthropic Claude API |
-| Image Processing | Pillow, OpenCV |
+| IQA metrics | pyiqa (BRISQUE, NIMA, CLIP-IQA+) |
+| Saliency | rembg (U²-Net, CPU backend) |
+| Image processing | Pillow, OpenCV, scikit-image |
+| LLM | Anthropic Claude API (`claude-opus-4-6` by default) |
+| Data models | Pydantic v2 |
 
 ## Project Structure
 
-Directories are created incrementally as code is written. Current state:
-
 ```
 image-analysis/
+├── app.py                        # Streamlit entry point
 ├── requirements.txt
-├── .env.example
-├── CLAUDE.md
-└── README.md
+├── pyproject.toml                # ruff, mypy, bandit, pytest config
+├── .env.example                  # environment variable template
+├── prompts/
+│   └── system.md                 # Claude system prompt
+├── src/
+│   ├── models.py                 # Pydantic models
+│   ├── utils/loader.py           # image I/O + EXIF extraction
+│   ├── analysis/
+│   │   ├── technical.py          # Layer 1: IQA + CV metrics
+│   │   └── composition.py        # Layer 2: composition analysis
+│   └── llm/
+│       ├── client.py             # Anthropic SDK wrapper
+│       └── synthesizer.py        # Layer 3: LLM synthesis
+└── tests/                        # 130 tests, all mocked — no GPU/API key needed
 ```
 
 ## Setup
 
+### 1. Clone
+
 ```bash
-# 1. Clone the repo
 git clone https://github.com/dhruv-doshi/image-analysis.git
 cd image-analysis
+```
 
-# 2. Create and activate a virtual environment
-python -m venv .venv
-source .venv/bin/activate   # Windows: .venv\Scripts\activate
+### 2. Create virtual environment
 
-# 3. Install dependencies
+```bash
+python3.11 -m venv .venv
+source .venv/bin/activate        # Windows: .venv\Scripts\activate
+```
+
+### 3. Install dependencies
+
+```bash
 pip install -r requirements.txt
+```
 
-# 4. Set up environment variables
+> **Note:** On first run, rembg will automatically download the U²-Net model weights (~170 MB). pyiqa will also download BRISQUE/NIMA/CLIP-IQA+ weights. This only happens once and is cached in `~/.cache/`.
+
+### 4. Configure environment variables
+
+```bash
 cp .env.example .env
-# Edit .env and fill in your API keys
+```
 
-# 5. Run the app
+Open `.env` and set your Anthropic API key:
+
+```
+ANTHROPIC_API_KEY=sk-ant-...
+```
+
+All other variables are optional (see `.env.example` for details).
+
+### 5. Run
+
+```bash
 streamlit run app.py
 ```
 
+Open [http://localhost:8501](http://localhost:8501) in your browser, upload a JPEG, and wait for the analysis.
+
+## Running Tests
+
+No API key or GPU required — all external dependencies are mocked.
+
+```bash
+source .venv/bin/activate
+pytest
+```
+
+Expected: **130 passed, 7 skipped** (the 7 skipped require the optional `piexif` package).
+
 ## Environment Variables
 
-See `.env.example` for all required variables. At minimum you will need an `ANTHROPIC_API_KEY`.
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
+| `LLM_MODEL` | No | `claude-opus-4-6` | Claude model ID |
+| `MAX_IMAGE_SIZE_MB` | No | `10` | Upload size limit |
+| `STREAMLIT_SERVER_PORT` | No | `8501` | Streamlit port |

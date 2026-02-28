@@ -59,7 +59,15 @@ temp/
 # Cache
 .cache/
 *.cache
+.mypy_cache/
+.ruff_cache/
+.pytest_cache/
 
+# Git worktrees
+.trees/
+
+# Claude Code local settings
+.claude/
 
 # User files
 /project_steps
