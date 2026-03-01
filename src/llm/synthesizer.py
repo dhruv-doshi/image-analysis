@@ -20,12 +20,12 @@ _PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 _SYSTEM_PROMPT: str = (_PROMPTS_DIR / "system.md").read_text(encoding="utf-8")
 
 _FEATURE_NAMES: dict[AnalysisFeature, str] = {
-    AnalysisFeature.COMPOSITION:  "composition",
-    AnalysisFeature.AESTHETICS:   "aesthetics",
-    AnalysisFeature.TECHNICAL:    "technical",
+    AnalysisFeature.COMPOSITION: "composition",
+    AnalysisFeature.AESTHETICS: "aesthetics",
+    AnalysisFeature.TECHNICAL: "technical",
     AnalysisFeature.IMPROVEMENTS: "improvements",
-    AnalysisFeature.EDITING:      "editing",
-    AnalysisFeature.INSPIRATION:  "inspiration",
+    AnalysisFeature.EDITING: "editing",
+    AnalysisFeature.INSPIRATION: "inspiration",
 }
 
 
@@ -100,11 +100,11 @@ def _compute_quality_tier(tech: TechnicalScores) -> dict:
     )
     overall = int((b * 3 + s * 2 + n * 2 + e * 1) / 8.0 + 0.5)
     return {
-        "overall":        _t(overall),
-        "brisque_tier":   _t(b),
+        "overall": _t(overall),
+        "brisque_tier": _t(b),
         "sharpness_tier": _t(s),
-        "noise_tier":     _t(n),
-        "exposure_tier":  _t(e),
+        "noise_tier": _t(n),
+        "exposure_tier": _t(e),
     }
 
 
@@ -115,14 +115,11 @@ def _build_payload(
     features: AnalysisFeature,
 ) -> str:
     """Build the annotated JSON user message from scores."""
-    requested = [
-        name for flag, name in _FEATURE_NAMES.items() if flag in features
-    ]
+    requested = [name for flag, name in _FEATURE_NAMES.items() if flag in features]
 
     payload = {
         "exif": exif.model_dump(exclude_none=True),
         "quality_tier": _compute_quality_tier(tech),
-
         "technical": {
             "brisque": {
                 "value": tech.brisque,
@@ -173,7 +170,6 @@ def _build_payload(
                 "scale": "std/mean of grayscale; <0.2=flat, 0.2–0.5=normal, >0.5=punchy",
             },
         },
-
         "composition": {
             "saliency_centroid_x": {
                 "value": comp.saliency_centroid_x,
@@ -228,7 +224,6 @@ def _build_payload(
                 "scale": "line angles in degrees 0–180; 0/180=horizontal, 90=vertical",
             },
         },
-
         "requested_features": requested,
     }
 
@@ -270,7 +265,10 @@ def synthesise(
         messages=[{"role": "user", "content": user_message}],
     )
 
-    raw_text: str = response.content[0].text.strip()
+    first_block = response.content[0]
+    if not hasattr(first_block, "text"):
+        raise ValueError(f"Unexpected response block type: {type(first_block)}")
+    raw_text: str = first_block.text.strip()
     logger.debug(
         "Claude responded with %d chars (stop_reason=%s)",
         len(raw_text),
@@ -283,9 +281,7 @@ def synthesise(
         raw_text = raw_text.rsplit("```", 1)[0].strip()  # drop closing fence
 
     if not raw_text:
-        raise ValueError(
-            f"Claude returned an empty response (stop_reason={response.stop_reason})"
-        )
+        raise ValueError(f"Claude returned an empty response (stop_reason={response.stop_reason})")
 
     try:
         data = json.loads(raw_text)
@@ -294,8 +290,15 @@ def synthesise(
         raise
 
     # Claude occasionally returns list values for string fields; join them.
-    for key in ("summary", "composition", "aesthetics", "technical",
-                "improvements", "editing", "inspiration"):
+    for key in (
+        "summary",
+        "composition",
+        "aesthetics",
+        "technical",
+        "improvements",
+        "editing",
+        "inspiration",
+    ):
         if isinstance(data.get(key), list):
             data[key] = "\n".join(str(item) for item in data[key])
 

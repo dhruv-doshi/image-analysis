@@ -22,7 +22,7 @@ uploaded_file = st.file_uploader("Upload a photo", type=["jpg", "jpeg"])
 
 if uploaded_file is not None:
     file_bytes = uploaded_file.getvalue()
-    file_hash = hashlib.md5(file_bytes).hexdigest()
+    file_hash = hashlib.md5(file_bytes, usedforsecurity=False).hexdigest()
 
     # Run processing only when a new/different file is uploaded
     if st.session_state.get("file_hash") != file_hash:
@@ -32,13 +32,15 @@ if uploaded_file is not None:
             scores = analyse_technical(bgr_array, tensor)
         with st.spinner("Analysing composition…"):
             comp = analyse_composition(bgr_array, pil_image)
-        st.session_state.update({
-            "file_hash": file_hash,
-            "pil_image": pil_image,
-            "exif": exif,
-            "scores": scores,
-            "comp": comp,
-        })
+        st.session_state.update(
+            {
+                "file_hash": file_hash,
+                "pil_image": pil_image,
+                "exif": exif,
+                "scores": scores,
+                "comp": comp,
+            }
+        )
 
     pil_image = st.session_state["pil_image"]
     exif = st.session_state["exif"]
@@ -90,15 +92,27 @@ if uploaded_file is not None:
     st.markdown("**Learned IQA**")
     c1, c2, c3 = st.columns(3)
     c1.metric("BRISQUE", f"{scores.brisque:.1f}", help="0–100 · lower = better")
-    c2.metric("NIMA Aesthetic", f"{scores.nima_aesthetic:.2f}" if scores.nima_aesthetic is not None else "—", help="1–10 · higher = better")
-    c3.metric("CLIP-IQA+", f"{scores.clip_iqa:.3f}" if scores.clip_iqa is not None else "—", help="0–1 · higher = better")
+    c2.metric(
+        "NIMA Aesthetic",
+        f"{scores.nima_aesthetic:.2f}" if scores.nima_aesthetic is not None else "—",
+        help="1–10 · higher = better",
+    )
+    c3.metric(
+        "CLIP-IQA+",
+        f"{scores.clip_iqa:.3f}" if scores.clip_iqa is not None else "—",
+        help="0–1 · higher = better",
+    )
 
     st.divider()
 
     # Group 2 — Sharpness
     st.markdown("**Sharpness**")
     c1, c2, c3, c4, c5 = st.columns(5)
-    c1.metric("Global (Laplacian)", f"{scores.sharpness_laplacian:.1f}", help="Variance of Laplacian · higher = sharper")
+    c1.metric(
+        "Global (Laplacian)",
+        f"{scores.sharpness_laplacian:.1f}",
+        help="Variance of Laplacian · higher = sharper",
+    )
     c2.metric("Top-Left", f"{scores.sharpness_regional.get('top_left', 0):.1f}")
     c3.metric("Top-Right", f"{scores.sharpness_regional.get('top_right', 0):.1f}")
     c4.metric("Bottom-Left", f"{scores.sharpness_regional.get('bottom_left', 0):.1f}")
@@ -109,8 +123,14 @@ if uploaded_file is not None:
     # Group 3 — Exposure
     st.markdown("**Exposure**")
     c1, c2, c3, c4 = st.columns(4)
-    c1.metric("Highlights Clipped", f"{scores.exposure_clipped_highlights_pct:.2f}%", help="% pixels near 255")
-    c2.metric("Shadows Clipped", f"{scores.exposure_clipped_shadows_pct:.2f}%", help="% pixels near 0")
+    c1.metric(
+        "Highlights Clipped",
+        f"{scores.exposure_clipped_highlights_pct:.2f}%",
+        help="% pixels near 255",
+    )
+    c2.metric(
+        "Shadows Clipped", f"{scores.exposure_clipped_shadows_pct:.2f}%", help="% pixels near 0"
+    )
     c3.metric("Mean Brightness", f"{scores.histogram_mean:.1f}", help="0–255")
     c4.metric("Std Dev", f"{scores.histogram_std:.1f}")
 
@@ -140,8 +160,12 @@ if uploaded_file is not None:
     st.markdown("**Alignment Scores**")
     c1, c2, c3 = st.columns(3)
     c1.metric("Rule of Thirds", f"{comp.rot_alignment_score:.3f}", help="0=perfect · 1=worst")
-    c2.metric("Golden Ratio", f"{comp.golden_ratio_alignment_score:.3f}", help="0=perfect · 1=worst")
-    c3.metric("Negative Space", f"{comp.negative_space_ratio:.1%}", help="Fraction of non-salient pixels")
+    c2.metric(
+        "Golden Ratio", f"{comp.golden_ratio_alignment_score:.3f}", help="0=perfect · 1=worst"
+    )
+    c3.metric(
+        "Negative Space", f"{comp.negative_space_ratio:.1%}", help="Fraction of non-salient pixels"
+    )
 
     st.divider()
 
@@ -151,8 +175,14 @@ if uploaded_file is not None:
     balance = comp.visual_weight_balance
     balance_str = f"{balance:.2f}×" if math.isfinite(balance) else "∞"
     c1.metric("Visual Balance", balance_str, help="1.0=balanced · higher=unbalanced")
-    c2.metric("Horizontal Symmetry", f"{comp.symmetry_horizontal:.3f}", help="NCC left↔right · 1.0=symmetric")
-    c3.metric("Vertical Symmetry", f"{comp.symmetry_vertical:.3f}", help="NCC top↔bottom · 1.0=symmetric")
+    c2.metric(
+        "Horizontal Symmetry",
+        f"{comp.symmetry_horizontal:.3f}",
+        help="NCC left↔right · 1.0=symmetric",
+    )
+    c3.metric(
+        "Vertical Symmetry", f"{comp.symmetry_vertical:.3f}", help="NCC top↔bottom · 1.0=symmetric"
+    )
 
     st.divider()
 

@@ -45,28 +45,28 @@ class TechnicalScores(BaseModel):
 
 
 class CompositionScores(BaseModel):
-    saliency_centroid_x: float           # normalised 0-1 from left
-    saliency_centroid_y: float           # normalised 0-1 from top
-    rot_alignment_score: float           # 0=perfect RoT, 1=worst
+    saliency_centroid_x: float  # normalised 0-1 from left
+    saliency_centroid_y: float  # normalised 0-1 from top
+    rot_alignment_score: float  # 0=perfect RoT, 1=worst
     golden_ratio_alignment_score: float  # 0=perfect GR, 1=worst
-    best_alignment: str                  # "rule_of_thirds" | "golden_ratio"
-    negative_space_ratio: float          # 0-1, fraction of non-salient pixels
-    visual_weight_quadrants: dict        # {top_left, top_right, bottom_left, bottom_right}
-    visual_weight_balance: float         # ratio heaviest/lightest quadrant (1.0=balanced)
-    symmetry_horizontal: float           # NCC left vs right halves (1.0=symmetric)
-    symmetry_vertical: float             # NCC top vs bottom halves (1.0=symmetric)
-    dominant_line_angles: list[float]    # degrees, from HoughLinesP
+    best_alignment: str  # "rule_of_thirds" | "golden_ratio"
+    negative_space_ratio: float  # 0-1, fraction of non-salient pixels
+    visual_weight_quadrants: dict  # {top_left, top_right, bottom_left, bottom_right}
+    visual_weight_balance: float  # ratio heaviest/lightest quadrant (1.0=balanced)
+    symmetry_horizontal: float  # NCC left vs right halves (1.0=symmetric)
+    symmetry_vertical: float  # NCC top vs bottom halves (1.0=symmetric)
+    dominant_line_angles: list[float]  # degrees, from HoughLinesP
     leading_lines_converge_to_subject: bool
-    line_pattern: str                    # "diagonal"|"horizontal"|"vertical"|"mixed"|"none"
+    line_pattern: str  # "diagonal"|"horizontal"|"vertical"|"mixed"|"none"
 
 
 class AnalysisReport(BaseModel):
-    summary: str                    # always present; 2-3 sentence overall assessment
+    summary: str  # always present; 2-3 sentence overall assessment
     composition: str | None = None  # AnalysisFeature.COMPOSITION
-    aesthetics: str | None = None   # AnalysisFeature.AESTHETICS
-    technical: str | None = None    # AnalysisFeature.TECHNICAL
-    improvements: str | None = None # AnalysisFeature.IMPROVEMENTS
-    editing: str | None = None      # AnalysisFeature.EDITING
+    aesthetics: str | None = None  # AnalysisFeature.AESTHETICS
+    technical: str | None = None  # AnalysisFeature.TECHNICAL
+    improvements: str | None = None  # AnalysisFeature.IMPROVEMENTS
+    editing: str | None = None  # AnalysisFeature.EDITING
     inspiration: str | None = None  # AnalysisFeature.INSPIRATION
 
 

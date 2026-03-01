@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import os
 import tempfile
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
 
@@ -21,7 +22,7 @@ _models_loaded = False
 
 
 @asynccontextmanager
-async def lifespan(app: FastAPI):
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     global _models_loaded
     import src.analysis.composition  # noqa: F401 — triggers model pre-warm
     import src.analysis.technical  # noqa: F401 — triggers model pre-warm

@@ -16,10 +16,12 @@ logger = logging.getLogger(__name__)
 # Saliency map via rembg U²-Net
 # ---------------------------------------------------------------------------
 
+
 def _saliency_map(pil_image: Image.Image) -> np.ndarray:
     """Return float32 saliency map in [0, 1] from rembg alpha channel."""
     try:
         from rembg import remove  # lazy import — heavy dependency
+
         result = remove(pil_image)
         alpha = np.array(result)[:, :, 3].astype(np.float32) / 255.0
         return alpha
@@ -33,6 +35,7 @@ def _saliency_map(pil_image: Image.Image) -> np.ndarray:
 # ---------------------------------------------------------------------------
 # Centroid
 # ---------------------------------------------------------------------------
+
 
 def _centroid(saliency: np.ndarray) -> tuple[float, float]:
     """Weighted centre of mass normalised to [0, 1]. Returns (0.5, 0.5) if blank."""
@@ -49,6 +52,7 @@ def _centroid(saliency: np.ndarray) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 # Alignment scores
 # ---------------------------------------------------------------------------
+
 
 def _rot_alignment(cx: float, cy: float) -> float:
     """Min distance to 4 Rule-of-Thirds power points, normalised to [0, 1]."""
@@ -73,6 +77,7 @@ def _golden_ratio_alignment(cx: float, cy: float) -> float:
 # Negative space
 # ---------------------------------------------------------------------------
 
+
 def _negative_space(saliency: np.ndarray, threshold: float = 0.5) -> float:
     """Fraction of pixels below 50% of max saliency (non-salient area)."""
     max_val = saliency.max()
@@ -84,6 +89,7 @@ def _negative_space(saliency: np.ndarray, threshold: float = 0.5) -> float:
 # ---------------------------------------------------------------------------
 # Visual weight
 # ---------------------------------------------------------------------------
+
 
 def _visual_weight(saliency: np.ndarray) -> tuple[dict, float]:
     """Per-quadrant normalised saliency sums + balance ratio (max/min, 1.0=balanced)."""
@@ -109,6 +115,7 @@ def _visual_weight(saliency: np.ndarray) -> tuple[dict, float]:
 # Symmetry
 # ---------------------------------------------------------------------------
 
+
 def _ncc(a: np.ndarray, b: np.ndarray) -> float:
     """Normalised cross-correlation in [-1, 1].
 
@@ -132,12 +139,12 @@ def _symmetry(saliency: np.ndarray) -> tuple[float, float]:
 
     # Horizontal symmetry: first mw cols vs last mw cols (mirrored)
     left = saliency[:, :mw].astype(np.float64)
-    right = np.fliplr(saliency[:, w - mw:]).astype(np.float64)
+    right = np.fliplr(saliency[:, w - mw :]).astype(np.float64)
     h_sym = _ncc(left, right)
 
     # Vertical symmetry: first mh rows vs last mh rows (mirrored)
     top = saliency[:mh, :].astype(np.float64)
-    bottom = np.flipud(saliency[h - mh:, :]).astype(np.float64)
+    bottom = np.flipud(saliency[h - mh :, :]).astype(np.float64)
     v_sym = _ncc(top, bottom)
 
     return h_sym, v_sym
@@ -146,6 +153,7 @@ def _symmetry(saliency: np.ndarray) -> tuple[float, float]:
 # ---------------------------------------------------------------------------
 # Leading lines
 # ---------------------------------------------------------------------------
+
 
 def _classify_pattern(angles: list[float]) -> str:
     """Classify dominant line pattern from angles in degrees [0, 180)."""
@@ -167,15 +175,17 @@ def _classify_pattern(angles: list[float]) -> str:
     return "mixed"
 
 
-def _leading_lines(
-    bgr_array: np.ndarray, cx: float, cy: float
-) -> tuple[list[float], bool, str]:
+def _leading_lines(bgr_array: np.ndarray, cx: float, cy: float) -> tuple[list[float], bool, str]:
     """Canny + HoughLinesP → (angles_deg, converges_to_subject, line_pattern)."""
     gray = cv2.cvtColor(bgr_array, cv2.COLOR_BGR2GRAY)
     edges = cv2.Canny(gray, 50, 150)
     lines = cv2.HoughLinesP(
-        edges, rho=1, theta=np.pi / 180, threshold=50,
-        minLineLength=50, maxLineGap=10,
+        edges,
+        rho=1,
+        theta=np.pi / 180,
+        threshold=50,
+        minLineLength=50,
+        maxLineGap=10,
     )
     if lines is None:
         return [], False, "none"
@@ -206,6 +216,7 @@ def _leading_lines(
 # ---------------------------------------------------------------------------
 # Public entry point
 # ---------------------------------------------------------------------------
+
 
 def analyse(bgr_array: np.ndarray, pil_image: Image.Image) -> CompositionScores:
     """

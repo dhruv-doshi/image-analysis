@@ -1,10 +1,34 @@
 # FrameIQ — AI Photo Analysis
 
-An AI-powered Streamlit app that analyses uploaded photographs for composition, technical quality, and aesthetics — then returns a structured natural-language critique with improvement tips and photographer inspiration.
+AI-powered photo analysis tool. Upload a photograph and receive a structured critique covering composition, technical quality, aesthetics, editing tips, and photographer inspiration — powered by a three-layer pipeline and Claude.
+
+## Architecture
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  Next.js Frontend (Vercel)                               │
+│  – File upload, results display, EXIF viewer             │
+└─────────────────────┬────────────────────────────────────┘
+                      │ HTTPS / REST
+┌─────────────────────▼────────────────────────────────────┐
+│  FastAPI Backend (Fly.io)                                │
+│                                                          │
+│  Layer 1 — Technical (pyiqa + classical CV)              │
+│    BRISQUE · NIMA · CLIP-IQA+ · sharpness · noise        │
+│    exposure · dynamic range · contrast                   │
+│                                                          │
+│  Layer 2 — Composition (rembg U²-Net saliency)           │
+│    Rule-of-Thirds · Golden Ratio · leading lines         │
+│    symmetry · visual weight · negative space             │
+│                                                          │
+│  Layer 3 — LLM Synthesis (Anthropic Claude)              │
+│    structured AnalysisReport JSON from claude-opus-4-6   │
+└──────────────────────────────────────────────────────────┘
+```
 
 ## Features
 
-- **Composition Analysis** — Rule of Thirds / Golden Ratio alignment, leading lines, symmetry, visual weight, negative space (powered by U²-Net saliency via rembg)
+- **Composition Analysis** — Rule of Thirds / Golden Ratio alignment, leading lines, symmetry, visual weight, negative space (U²-Net saliency via rembg)
 - **Technical Assessment** — sharpness, noise, exposure clipping, dynamic range, contrast (BRISQUE, NIMA, CLIP-IQA+)
 - **AI Critique** — natural-language report from Claude covering composition, aesthetics, technical quality, editing tips, and photographer inspiration
 - **EXIF Display** — camera, lens, ISO, shutter speed, aperture, focal length
@@ -13,37 +37,17 @@ An AI-powered Streamlit app that analyses uploaded photographs for composition, 
 
 | Layer | Technology |
 |---|---|
-| UI | Streamlit |
-| Language | Python 3.11+ |
+| Frontend UI | Next.js 16 + React 19 + Tailwind CSS |
+| Backend API | FastAPI + uvicorn |
 | IQA metrics | pyiqa (BRISQUE, NIMA, CLIP-IQA+) |
-| Saliency | rembg (U²-Net, CPU backend) |
+| Saliency | rembg (U²-Net, CPU) |
 | Image processing | Pillow, OpenCV, scikit-image |
-| LLM | Anthropic Claude API (`claude-opus-4-6` by default) |
+| LLM | Anthropic Claude (`claude-opus-4-6` by default) |
 | Data models | Pydantic v2 |
+| Backend hosting | Fly.io (Docker) |
+| Frontend hosting | Vercel |
 
-## Project Structure
-
-```
-image-analysis/
-├── app.py                        # Streamlit entry point
-├── requirements.txt
-├── pyproject.toml                # ruff, mypy, bandit, pytest config
-├── .env.example                  # environment variable template
-├── prompts/
-│   └── system.md                 # Claude system prompt
-├── src/
-│   ├── models.py                 # Pydantic models
-│   ├── utils/loader.py           # image I/O + EXIF extraction
-│   ├── analysis/
-│   │   ├── technical.py          # Layer 1: IQA + CV metrics
-│   │   └── composition.py        # Layer 2: composition analysis
-│   └── llm/
-│       ├── client.py             # Anthropic SDK wrapper
-│       └── synthesizer.py        # Layer 3: LLM synthesis
-└── tests/                        # 130 tests, all mocked — no GPU/API key needed
-```
-
-## Setup
+## Quick Start (local)
 
 ### 1. Clone
 
@@ -52,44 +56,42 @@ git clone https://github.com/dhruv-doshi/image-analysis.git
 cd image-analysis
 ```
 
-### 2. Create virtual environment
+### 2. One-command setup
 
 ```bash
-python3.11 -m venv .venv
-source .venv/bin/activate        # Windows: .venv\Scripts\activate
+./scripts/setup.sh
 ```
 
-### 3. Install dependencies
+This creates `.venv`, installs Python + frontend dependencies, copies `.env` and `frontend/.env` from their examples, and registers pre-commit hooks.
+
+### 3. Configure environment variables
 
 ```bash
-pip install -r requirements.txt
+# Backend
+nano .env                  # set ANTHROPIC_API_KEY=sk-ant-...
+
+# Frontend (only needed if the API runs on a non-default port)
+nano frontend/.env         # NEXT_PUBLIC_API_URL=http://localhost:8000
 ```
 
-> **Note:** On first run, rembg will automatically download the U²-Net model weights (~170 MB). pyiqa will also download BRISQUE/NIMA/CLIP-IQA+ weights. This only happens once and is cached in `~/.cache/`.
-
-### 4. Configure environment variables
+### 4. Run
 
 ```bash
-cp .env.example .env
+./run_local.sh
 ```
 
-Open `.env` and set your Anthropic API key:
+- Frontend: [http://localhost:3000](http://localhost:3000)
+- Backend API docs: [http://localhost:8000/docs](http://localhost:8000/docs)
 
-```
-ANTHROPIC_API_KEY=sk-ant-...
-```
-
-All other variables are optional (see `.env.example` for details).
-
-### 5. Run
+## Running Quality Checks
 
 ```bash
-streamlit run app.py
+./scripts/check_quality.sh
 ```
 
-Open [http://localhost:8501](http://localhost:8501) in your browser, upload a JPEG, and wait for the analysis.
+Runs in sequence: Ruff lint → Ruff format check → Mypy → Bandit → TypeScript type-check → ESLint → Next.js build check. Exits non-zero on first failure.
 
-## Running Tests
+## Testing
 
 No API key or GPU required — all external dependencies are mocked.
 
@@ -98,13 +100,118 @@ source .venv/bin/activate
 pytest
 ```
 
-Expected: **130 passed, 7 skipped** (the 7 skipped require the optional `piexif` package).
+Expected: **130+ passed, 7 skipped** (the 7 skipped require the optional `piexif` package).
+
+Frontend type-check:
+
+```bash
+npm --prefix frontend run type-check
+npm --prefix frontend run lint
+```
+
+## Deploy to Production
+
+### Prerequisites
+
+| Tool | Install |
+|---|---|
+| `fly` CLI | https://fly.io/docs/hands-on/install-flyctl/ |
+| `vercel` CLI | `npm install -g vercel` |
+
+### Backend → Fly.io
+
+```bash
+fly auth login
+fly apps create frameiq-api          # first time only
+fly secrets set ANTHROPIC_API_KEY=sk-ant-...
+fly secrets set ALLOWED_ORIGINS=https://<your-vercel-url>.vercel.app
+fly deploy
+```
+
+Health check: `https://frameiq-api.fly.dev/health`
+
+> **Model caching:** `scripts/warmup_models.py` runs at Docker build time and bakes all model weights (pyiqa × 3, rembg U²-Net) into the image at `HF_HOME=/app/.hf_cache`. Cold starts take ~5 s instead of 60 s+. The Docker image is ~2 GB; first `fly deploy` build takes ~5–8 min.
+
+### Frontend → Vercel
+
+```bash
+cd frontend
+vercel                               # first deploy — follow prompts
+```
+
+In the Vercel dashboard → Project Settings → Environment Variables, add:
+
+```
+NEXT_PUBLIC_API_URL = https://frameiq-api.fly.dev
+```
+
+Subsequent deploys:
+
+```bash
+vercel --prod
+```
+
+### One-command deploy helper
+
+```bash
+./scripts/deploy.sh              # deploy both
+./scripts/deploy.sh --backend    # backend only
+./scripts/deploy.sh --frontend   # frontend only
+```
 
 ## Environment Variables
+
+### Backend (`.env`)
 
 | Variable | Required | Default | Description |
 |---|---|---|---|
 | `ANTHROPIC_API_KEY` | Yes | — | Anthropic API key |
 | `LLM_MODEL` | No | `claude-opus-4-6` | Claude model ID |
-| `MAX_IMAGE_SIZE_MB` | No | `10` | Upload size limit |
-| `STREAMLIT_SERVER_PORT` | No | `8501` | Streamlit port |
+| `MAX_IMAGE_SIZE_MB` | No | `20` | Upload size limit |
+| `ALLOWED_ORIGINS` | No | `*` | Comma-separated CORS origins |
+| `HF_HOME` | No | `~/.cache/huggingface` | Model weight cache directory |
+| `STREAMLIT_SERVER_PORT` | No | `8501` | Port when running `app.py` directly |
+
+### Frontend (`frontend/.env`)
+
+| Variable | Required | Default | Description |
+|---|---|---|---|
+| `NEXT_PUBLIC_API_URL` | No | `http://localhost:8000` | Backend API base URL |
+
+## Project Structure
+
+```
+image-analysis/
+├── api.py                        # FastAPI entry point
+├── app.py                        # Streamlit entry point (local dev)
+├── run_local.sh                  # Start both servers locally
+├── requirements.txt
+├── pyproject.toml                # ruff, mypy, bandit, pytest config
+├── pytest.ini
+├── Dockerfile                    # Backend Docker image (Fly.io)
+├── fly.toml                      # Fly.io configuration
+├── .env.example                  # Backend environment variable template
+├── CLAUDE.md
+├── README.md
+├── prompts/
+│   └── system.md                 # Claude system prompt
+├── scripts/
+│   ├── check_quality.sh          # One-command quality gate
+│   ├── setup.sh                  # First-time dev setup
+│   ├── deploy.sh                 # Guided deploy helper
+│   └── warmup_models.py          # Pre-download model weights (Docker build)
+├── src/
+│   ├── models.py                 # Pydantic models
+│   ├── utils/loader.py           # Image I/O + EXIF extraction
+│   ├── analysis/
+│   │   ├── technical.py          # Layer 1: IQA + CV metrics
+│   │   └── composition.py        # Layer 2: composition analysis
+│   └── llm/
+│       ├── client.py             # Anthropic SDK wrapper
+│       └── synthesizer.py        # Layer 3: LLM synthesis
+├── frontend/                     # Next.js 16 app (Vercel)
+│   ├── src/app/
+│   ├── .env.example
+│   └── package.json
+└── tests/                        # 130+ tests, all mocked
+```
