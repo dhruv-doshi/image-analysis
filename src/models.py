@@ -68,3 +68,19 @@ class AnalysisReport(BaseModel):
     improvements: str | None = None # AnalysisFeature.IMPROVEMENTS
     editing: str | None = None      # AnalysisFeature.EDITING
     inspiration: str | None = None  # AnalysisFeature.INSPIRATION
+
+
+class QualityTier(BaseModel):
+    overall: str
+    brisque_tier: str
+    sharpness_tier: str
+    noise_tier: str
+    exposure_tier: str
+
+
+class AnalyseResponse(BaseModel):
+    exif: ExifData
+    quality_tier: QualityTier
+    technical: TechnicalScores
+    composition: CompositionScores
+    report: AnalysisReport

@@ -37,38 +37,55 @@ def _t(ordinal: int) -> str:
 
 
 def _brisque_ord(v: float) -> int:
-    if math.isnan(v): return 2
-    if v < 30: return 0
-    if v < 50: return 1
-    if v < 65: return 2
-    if v < 80: return 3
+    if math.isnan(v):
+        return 2
+    if v < 30:
+        return 0
+    if v < 50:
+        return 1
+    if v < 65:
+        return 2
+    if v < 80:
+        return 3
     return 4
 
 
 def _sharpness_ord(sharpness: float, noise_sigma: float) -> int:
-    adj = max(0.0, sharpness - noise_sigma ** 2 * 20)
-    if adj > 500: return 0
-    if adj >= 200: return 2
-    if adj >= 80:  return 3
+    adj = max(0.0, sharpness - noise_sigma**2 * 20)
+    if adj > 500:
+        return 0
+    if adj >= 200:
+        return 2
+    if adj >= 80:
+        return 3
     return 4
 
 
 def _noise_ord(v: float) -> int:
-    if math.isnan(v): return 2
-    if v < 3:  return 0
-    if v <= 8: return 2
-    if v <= 15: return 3
+    if math.isnan(v):
+        return 2
+    if v < 3:
+        return 0
+    if v <= 8:
+        return 2
+    if v <= 15:
+        return 3
     return 4
 
 
 def _exposure_ord(hl: float, sh: float, mean: float) -> int:
     severe = sum([hl > 15, sh > 20, mean < 40 or mean > 230])
-    poor   = sum([hl > 5,  sh > 5,  mean < 80 or mean > 200])
-    if severe >= 2: return 4
-    if severe >= 1: return 3
-    if poor   >= 2: return 3
-    if poor   >= 1: return 2
-    if hl > 2 or sh > 2: return 1
+    poor = sum([hl > 5, sh > 5, mean < 80 or mean > 200])
+    if severe >= 2:
+        return 4
+    if severe >= 1:
+        return 3
+    if poor >= 2:
+        return 3
+    if poor >= 1:
+        return 2
+    if hl > 2 or sh > 2:
+        return 1
     return 0
 
 
