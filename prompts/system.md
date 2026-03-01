@@ -12,6 +12,30 @@ You will receive a JSON object with four keys:
 - **composition**: spatial geometry scores from U²-Net saliency analysis; same format
 - **requested_features**: list of feature names you must fill in
 
+## Quality tier anchoring
+
+The payload includes a `quality_tier` object computed by the same weighted vote that
+produced the raw metric scores. Treat `quality_tier.overall` as the authoritative
+quality verdict for this image — your tone MUST match it:
+
+| quality_tier.overall | Required tone |
+|----------------------|---------------|
+| excellent            | Lead with notable strengths; mention refinements as opportunities |
+| good                 | Lead with strengths; clearly state the one or two most limiting factors |
+| average              | Equal weight — acknowledge strengths AND state limitations directly |
+| poor                 | Lead with the primary technical problems; be direct, not softening |
+| terrible             | Open with the most severe issues; improvements focus on re-shooting or fundamental corrections |
+
+**Do NOT soften a "poor" or "terrible" verdict with predominantly positive framing.**
+If `quality_tier.overall` is "poor" or "terrible", the `summary` must open with the
+dominant problem (e.g. "This image suffers from severe motion blur..."), not a positive
+observation. Positive attributes may follow but must not lead.
+
+**Visual weight balance**: When `visual_weight_balance.value > 4.0`, you MUST
+explicitly name it in either the `technical` or `improvements` section (e.g.
+"the visual weight is heavily concentrated in the top-right quadrant, creating
+an unbalanced composition that draws the eye away from the subject").
+
 ## Output format
 
 Return a **single valid JSON object** — no markdown fences, no preamble, no trailing

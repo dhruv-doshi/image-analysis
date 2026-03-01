@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import logging
+import math
 from pathlib import Path
 
 from src.llm.client import _MODEL, get_client
@@ -28,6 +29,68 @@ _FEATURE_NAMES: dict[AnalysisFeature, str] = {
 }
 
 
+_TIER_LABELS = ["excellent", "good", "average", "poor", "terrible"]
+
+
+def _t(ordinal: int) -> str:
+    return _TIER_LABELS[max(0, min(4, ordinal))]
+
+
+def _brisque_ord(v: float) -> int:
+    if math.isnan(v): return 2
+    if v < 30: return 0
+    if v < 50: return 1
+    if v < 65: return 2
+    if v < 80: return 3
+    return 4
+
+
+def _sharpness_ord(sharpness: float, noise_sigma: float) -> int:
+    adj = max(0.0, sharpness - noise_sigma ** 2 * 20)
+    if adj > 500: return 0
+    if adj >= 200: return 2
+    if adj >= 80:  return 3
+    return 4
+
+
+def _noise_ord(v: float) -> int:
+    if math.isnan(v): return 2
+    if v < 3:  return 0
+    if v <= 8: return 2
+    if v <= 15: return 3
+    return 4
+
+
+def _exposure_ord(hl: float, sh: float, mean: float) -> int:
+    severe = sum([hl > 15, sh > 20, mean < 40 or mean > 230])
+    poor   = sum([hl > 5,  sh > 5,  mean < 80 or mean > 200])
+    if severe >= 2: return 4
+    if severe >= 1: return 3
+    if poor   >= 2: return 3
+    if poor   >= 1: return 2
+    if hl > 2 or sh > 2: return 1
+    return 0
+
+
+def _compute_quality_tier(tech: TechnicalScores) -> dict:
+    b = _brisque_ord(tech.brisque)
+    s = _sharpness_ord(tech.sharpness_laplacian, tech.noise_sigma)
+    n = _noise_ord(tech.noise_sigma)
+    e = _exposure_ord(
+        tech.exposure_clipped_highlights_pct,
+        tech.exposure_clipped_shadows_pct,
+        tech.histogram_mean,
+    )
+    overall = int((b * 3 + s * 2 + n * 2 + e * 1) / 8.0 + 0.5)
+    return {
+        "overall":        _t(overall),
+        "brisque_tier":   _t(b),
+        "sharpness_tier": _t(s),
+        "noise_tier":     _t(n),
+        "exposure_tier":  _t(e),
+    }
+
+
 def _build_payload(
     tech: TechnicalScores,
     comp: CompositionScores,
@@ -41,6 +104,7 @@ def _build_payload(
 
     payload = {
         "exif": exif.model_dump(exclude_none=True),
+        "quality_tier": _compute_quality_tier(tech),
 
         "technical": {
             "brisque": {

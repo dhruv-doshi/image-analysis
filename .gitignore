@@ -71,3 +71,13 @@ temp/
 
 # User files
 /project_steps
+
+# Evaluation framework outputs
+tests/evaluation/results/
+# User-supplied photos (keep README, ignore image files)
+tests/evaluation/images/*.jpg
+tests/evaluation/images/*.jpeg
+tests/evaluation/images/*.png
+tests/evaluation/images/*.JPG
+tests/evaluation/images/*.JPEG
+tests/evaluation/images/*.PNG
