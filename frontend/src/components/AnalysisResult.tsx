@@ -145,7 +145,7 @@ export default function AnalysisResult({ result }: { result: AnalyseResponse }) 
               />
               <MetricCard
                 label="Negative space"
-                value={`${Math.round(composition.negative_space_ratio * 100)}%`}
+                value={composition.negative_space_ratio != null ? `${Math.round(composition.negative_space_ratio * 100)}%` : '—'}
               />
               <MetricCard
                 label="Line pattern"
@@ -153,13 +153,13 @@ export default function AnalysisResult({ result }: { result: AnalyseResponse }) 
               />
               <MetricCard
                 label="Visual weight balance"
-                value={composition.visual_weight_balance.toFixed(2)}
+                value={composition.visual_weight_balance != null ? composition.visual_weight_balance.toFixed(2) : '—'}
               />
               <MetricCard
                 label="Converges to subject"
                 value={composition.leading_lines_converge_to_subject ? 'Yes' : 'No'}
               />
-              {composition.dominant_line_angles.length > 0 && (
+              {composition.dominant_line_angles != null && composition.dominant_line_angles.length > 0 && (
                 <MetricCard
                   label="Dominant angles"
                   value={composition.dominant_line_angles.map(a => `${Math.round(a)}°`).join(', ')}
@@ -180,39 +180,39 @@ export default function AnalysisResult({ result }: { result: AnalyseResponse }) 
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <MetricCard
               label="BRISQUE"
-              value={technical.brisque.toFixed(1)}
+              value={technical.brisque != null ? technical.brisque.toFixed(1) : '—'}
               tier={quality_tier.brisque_tier}
             />
             <MetricCard
               label="Sharpness (Laplacian)"
-              value={technical.sharpness_laplacian.toFixed(1)}
+              value={technical.sharpness_laplacian != null ? technical.sharpness_laplacian.toFixed(1) : '—'}
               tier={quality_tier.sharpness_tier}
             />
             <MetricCard
               label="Noise sigma"
-              value={technical.noise_sigma.toFixed(2)}
+              value={technical.noise_sigma != null ? technical.noise_sigma.toFixed(2) : '—'}
               tier={quality_tier.noise_tier}
             />
             <MetricCard
               label="Highlights clipped"
-              value={`${technical.exposure_clipped_highlights_pct.toFixed(2)}%`}
+              value={technical.exposure_clipped_highlights_pct != null ? `${technical.exposure_clipped_highlights_pct.toFixed(2)}%` : '—'}
               tier={quality_tier.exposure_tier}
             />
             <MetricCard
               label="Shadows clipped"
-              value={`${technical.exposure_clipped_shadows_pct.toFixed(2)}%`}
+              value={technical.exposure_clipped_shadows_pct != null ? `${technical.exposure_clipped_shadows_pct.toFixed(2)}%` : '—'}
             />
             <MetricCard
               label="Dynamic range"
-              value={`${technical.dynamic_range_stops.toFixed(1)} stops`}
+              value={technical.dynamic_range_stops != null ? `${technical.dynamic_range_stops.toFixed(1)} stops` : '—'}
             />
             <MetricCard
               label="Contrast RMS"
-              value={technical.contrast_rms.toFixed(3)}
+              value={technical.contrast_rms != null ? technical.contrast_rms.toFixed(3) : '—'}
             />
             <MetricCard
               label="Histogram mean"
-              value={technical.histogram_mean.toFixed(1)}
+              value={technical.histogram_mean != null ? technical.histogram_mean.toFixed(1) : '—'}
             />
             {technical.nima_aesthetic != null && (
               <MetricCard
