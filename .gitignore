@@ -74,6 +74,9 @@ temp/
 
 # Evaluation framework outputs
 tests/evaluation/results/
+
+# Prompt comparison results (test artifacts — add notes to prompts/VERSIONS.md instead)
+prompts/comparisons/
 # User-supplied photos (keep README, ignore image files)
 tests/evaluation/images/*.jpg
 tests/evaluation/images/*.jpeg
