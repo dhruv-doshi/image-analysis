@@ -6,9 +6,9 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Mock anthropic at sys.modules level BEFORE any src.llm imports
-_anthropic_mock = MagicMock()
-sys.modules.setdefault("anthropic", _anthropic_mock)
+# Mock openai at sys.modules level BEFORE any src.llm imports
+_openai_mock = MagicMock()
+sys.modules.setdefault("openai", _openai_mock)
 
 from src.models import (
     AnalysisFeature,
@@ -24,12 +24,13 @@ from src.models import (
 # ---------------------------------------------------------------------------
 
 def _fake_response(json_body: dict):
-    """Construct a mock Anthropic messages.create() return value."""
-    block = MagicMock()
-    block.text = json.dumps(json_body)
-    msg = MagicMock()
-    msg.content = [block]
-    return msg
+    """Construct a mock chat.completions.create() return value."""
+    choice = MagicMock()
+    choice.message.content = json.dumps(json_body)
+    choice.finish_reason = "stop"
+    resp = MagicMock()
+    resp.choices = [choice]
+    return resp
 
 
 _FULL_RESPONSE = {
@@ -124,7 +125,7 @@ class TestOutputType:
         with patch("src.llm.synthesizer.get_client") as mock_get:
             mc = MagicMock()
             mock_get.return_value = mc
-            mc.messages.create.return_value = _fake_response(_FULL_RESPONSE)
+            mc.chat.completions.create.return_value = _fake_response(_FULL_RESPONSE)
             result = syn.synthesise(minimal_tech, minimal_comp, empty_exif)
 
         assert isinstance(result, AnalysisReport)
@@ -136,7 +137,7 @@ class TestOutputType:
         with patch("src.llm.synthesizer.get_client") as mock_get:
             mc = MagicMock()
             mock_get.return_value = mc
-            mc.messages.create.return_value = _fake_response({"summary": "Good shot."})
+            mc.chat.completions.create.return_value = _fake_response({"summary": "Good shot."})
             result = syn.synthesise(
                 minimal_tech, minimal_comp, empty_exif,
                 features=AnalysisFeature.COMPOSITION,
@@ -167,7 +168,7 @@ class TestFeatureFlags:
         with patch("src.llm.synthesizer.get_client") as mock_get:
             mc = MagicMock()
             mock_get.return_value = mc
-            mc.messages.create.return_value = _fake_response(response_body)
+            mc.chat.completions.create.return_value = _fake_response(response_body)
             result = syn.synthesise(
                 minimal_tech, minimal_comp, empty_exif, features=flag
             )
@@ -182,7 +183,7 @@ class TestFeatureFlags:
 
 
 class TestPayloadContent:
-    """The JSON sent to Claude contains all expected score fields."""
+    """The JSON sent to the LLM contains all expected score fields."""
 
     def _capture_payload(self, tech, comp, exif, features=AnalysisFeature.FULL):
         from unittest.mock import MagicMock, patch
@@ -191,11 +192,12 @@ class TestPayloadContent:
         with patch("src.llm.synthesizer.get_client") as mock_get:
             mc = MagicMock()
             mock_get.return_value = mc
-            mc.messages.create.return_value = _fake_response({"summary": "ok"})
+            mc.chat.completions.create.return_value = _fake_response({"summary": "ok"})
             syn.synthesise(tech, comp, exif, features)
-            call_kwargs = mc.messages.create.call_args
+            call_kwargs = mc.chat.completions.create.call_args
 
-        user_content = call_kwargs.kwargs["messages"][0]["content"]
+        # messages[0] is the system prompt; user payload is at index 1
+        user_content = call_kwargs.kwargs["messages"][1]["content"]
         return json.loads(user_content)
 
     def test_payload_contains_technical_scores(self, minimal_tech, minimal_comp, empty_exif):
@@ -236,21 +238,22 @@ class TestPayloadContent:
 
 
 class TestErrorHandling:
-    """Malformed JSON from Claude is re-raised as JSONDecodeError."""
+    """Malformed JSON from the LLM is re-raised as JSONDecodeError."""
 
     def test_invalid_json_raises(self, minimal_tech, minimal_comp, empty_exif):
         from unittest.mock import MagicMock, patch
         import src.llm.synthesizer as syn
 
-        bad_block = MagicMock()
-        bad_block.text = "This is not JSON {{"
-        bad_msg = MagicMock()
-        bad_msg.content = [bad_block]
+        bad_choice = MagicMock()
+        bad_choice.message.content = "This is not JSON {{"
+        bad_choice.finish_reason = "stop"
+        bad_resp = MagicMock()
+        bad_resp.choices = [bad_choice]
 
         with patch("src.llm.synthesizer.get_client") as mock_get:
             mc = MagicMock()
             mock_get.return_value = mc
-            mc.messages.create.return_value = bad_msg
+            mc.chat.completions.create.return_value = bad_resp
             with pytest.raises(json.JSONDecodeError):
                 syn.synthesise(minimal_tech, minimal_comp, empty_exif)
 
@@ -275,7 +278,7 @@ def test_synthesise_smoke(features, minimal_tech, minimal_comp, empty_exif):
     with patch("src.llm.synthesizer.get_client") as mock_get:
         mc = MagicMock()
         mock_get.return_value = mc
-        mc.messages.create.return_value = _fake_response(response_body)
+        mc.chat.completions.create.return_value = _fake_response(response_body)
         result = syn.synthesise(minimal_tech, minimal_comp, empty_exif, features)
 
     assert isinstance(result, AnalysisReport)

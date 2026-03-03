@@ -7,6 +7,9 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from dotenv import load_dotenv
+
+load_dotenv()  # must run before any src.llm imports so LLM_MODEL is in os.environ
+
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -15,8 +18,6 @@ from src.analysis.technical import analyse as analyse_technical
 from src.llm.synthesizer import _compute_quality_tier, synthesise
 from src.models import AnalysisFeature
 from src.utils.loader import extract_exif, load_image
-
-load_dotenv()
 
 _models_loaded = False
 

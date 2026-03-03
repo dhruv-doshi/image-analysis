@@ -250,29 +250,27 @@ def synthesise(
         requested feature plus always a summary.
 
     Raises:
-        anthropic.APIError: on network or quota failures (caller handles).
-        json.JSONDecodeError: if Claude returns malformed JSON (rare; log + raise).
+        openai.APIError: on network or quota failures (caller handles).
+        json.JSONDecodeError: if the LLM returns malformed JSON (rare; log + raise).
     """
     client = get_client()
     user_message = _build_payload(tech, comp, exif, features)
 
-    logger.debug("Calling Claude %s with %d-byte payload", _MODEL, len(user_message))
+    logger.debug("Calling LLM %s with %d-byte payload", _MODEL, len(user_message))
 
-    response = client.messages.create(
+    response = client.chat.completions.create(
         model=_MODEL,
         max_tokens=4096,
-        system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_message}],
+        messages=[
+            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "user", "content": user_message},
+        ],
     )
-
-    first_block = response.content[0]
-    if not hasattr(first_block, "text"):
-        raise ValueError(f"Unexpected response block type: {type(first_block)}")
-    raw_text: str = first_block.text.strip()
+    raw_text: str = (response.choices[0].message.content or "").strip()
     logger.debug(
-        "Claude responded with %d chars (stop_reason=%s)",
+        "LLM responded with %d chars (finish_reason=%s)",
         len(raw_text),
-        response.stop_reason,
+        response.choices[0].finish_reason,
     )
 
     # Strip markdown code fences if Claude wrapped the JSON
@@ -281,7 +279,9 @@ def synthesise(
         raw_text = raw_text.rsplit("```", 1)[0].strip()  # drop closing fence
 
     if not raw_text:
-        raise ValueError(f"Claude returned an empty response (stop_reason={response.stop_reason})")
+        raise ValueError(
+            f"LLM returned an empty response (finish_reason={response.choices[0].finish_reason})"
+        )
 
     try:
         data = json.loads(raw_text)
