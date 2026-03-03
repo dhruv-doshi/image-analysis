@@ -18,6 +18,7 @@ logger = logging.getLogger(__name__)
 
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 _SYSTEM_PROMPT: str = (_PROMPTS_DIR / "system.md").read_text(encoding="utf-8")
+_SYSTEM_PROMPT_V2: str = (_PROMPTS_DIR / "system_v2.md").read_text(encoding="utf-8")
 
 _FEATURE_NAMES: dict[AnalysisFeature, str] = {
     AnalysisFeature.COMPOSITION: "composition",
@@ -235,6 +236,7 @@ def synthesise(
     comp: CompositionScores,
     exif: ExifData,
     features: AnalysisFeature = AnalysisFeature.FULL,
+    system_prompt: str | None = None,
 ) -> AnalysisReport:
     """
     Synthesise a natural-language photo critique via Claude.
@@ -262,7 +264,7 @@ def synthesise(
         model=_MODEL,
         max_tokens=4096,
         messages=[
-            {"role": "system", "content": _SYSTEM_PROMPT},
+            {"role": "system", "content": system_prompt if system_prompt is not None else _SYSTEM_PROMPT},
             {"role": "user", "content": user_message},
         ],
     )

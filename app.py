@@ -9,9 +9,32 @@ load_dotenv()
 
 from src.analysis.composition import analyse as analyse_composition
 from src.analysis.technical import analyse as analyse_technical
-from src.llm.synthesizer import synthesise
+from src.llm.synthesizer import _SYSTEM_PROMPT_V2, synthesise
 from src.models import AnalysisFeature, AnalysisReport
 from src.utils.loader import extract_exif, load_image
+
+
+def _render_report(report: AnalysisReport) -> None:
+    st.markdown(f"**Summary**\n\n{report.summary}")
+    if report.composition:
+        with st.expander("Composition"):
+            st.markdown(report.composition)
+    if report.aesthetics:
+        with st.expander("Aesthetics"):
+            st.markdown(report.aesthetics)
+    if report.technical:
+        with st.expander("Technical Quality"):
+            st.markdown(report.technical)
+    if report.improvements:
+        with st.expander("Improvement Tips"):
+            st.markdown(report.improvements)
+    if report.editing:
+        with st.expander("Editing Tips"):
+            st.markdown(report.editing)
+    if report.inspiration:
+        with st.expander("Inspiration"):
+            st.markdown(report.inspiration)
+
 
 st.set_page_config(page_title="FrameIQ", layout="wide")
 
@@ -39,6 +62,8 @@ if uploaded_file is not None:
                 "exif": exif,
                 "scores": scores,
                 "comp": comp,
+                "report_v1": None,
+                "report_v2": None,
             }
         )
 
@@ -197,29 +222,40 @@ if uploaded_file is not None:
 
     # --- Layer 3: AI Analysis ---
     st.subheader("AI Analysis")
-    features = AnalysisFeature.FULL  # expose as multiselect in a later iteration
-    with st.spinner("Generating critique…"):
-        report: AnalysisReport = synthesise(scores, comp, exif, features)
+    features = AnalysisFeature.FULL
 
-    st.markdown(f"**Summary**\n\n{report.summary}")
-    if report.composition:
-        with st.expander("Composition"):
-            st.markdown(report.composition)
-    if report.aesthetics:
-        with st.expander("Aesthetics"):
-            st.markdown(report.aesthetics)
-    if report.technical:
-        with st.expander("Technical Quality"):
-            st.markdown(report.technical)
-    if report.improvements:
-        with st.expander("Improvement Tips"):
-            st.markdown(report.improvements)
-    if report.editing:
-        with st.expander("Editing Tips"):
-            st.markdown(report.editing)
-    if report.inspiration:
-        with st.expander("Inspiration"):
-            st.markdown(report.inspiration)
+    prompt_mode = st.radio(
+        "Prompt variant",
+        ["Original", "Flaw-focused", "Compare both"],
+        horizontal=True,
+        key="prompt_mode",
+    )
+
+    if prompt_mode == "Compare both":
+        if st.session_state.get("report_v1") is None:
+            with st.spinner("Generating critique (original prompt)…"):
+                st.session_state["report_v1"] = synthesise(scores, comp, exif, features)
+        if st.session_state.get("report_v2") is None:
+            with st.spinner("Generating critique (flaw-focused prompt)…"):
+                st.session_state["report_v2"] = synthesise(
+                    scores, comp, exif, features, system_prompt=_SYSTEM_PROMPT_V2
+                )
+        col_a, col_b = st.columns(2)
+        with col_a:
+            st.subheader("Original")
+            _render_report(st.session_state["report_v1"])
+        with col_b:
+            st.subheader("Flaw-focused")
+            _render_report(st.session_state["report_v2"])
+    else:
+        cache_key = "report_v2" if prompt_mode == "Flaw-focused" else "report_v1"
+        if st.session_state.get(cache_key) is None:
+            prompt = _SYSTEM_PROMPT_V2 if prompt_mode == "Flaw-focused" else None
+            with st.spinner("Generating critique…"):
+                st.session_state[cache_key] = synthesise(
+                    scores, comp, exif, features, system_prompt=prompt
+                )
+        _render_report(st.session_state[cache_key])
 
 else:
     st.info("No image uploaded yet. Use the uploader above to select a JPEG file.")
