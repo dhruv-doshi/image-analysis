@@ -176,7 +176,7 @@ export default function Home() {
         )}
 
         {/* Results */}
-        {result && <AnalysisResult result={result} />}
+        {result && preview && <AnalysisResult result={result} imageUrl={preview} />}
       </main>
     </div>
   )

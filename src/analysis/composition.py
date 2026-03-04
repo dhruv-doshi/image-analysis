@@ -264,4 +264,5 @@ def analyse(bgr_array: np.ndarray, pil_image: Image.Image) -> CompositionScores:
         dominant_line_angles=angles,
         leading_lines_converge_to_subject=converges,
         line_pattern=pattern,
+        saliency_map=saliency,
     )

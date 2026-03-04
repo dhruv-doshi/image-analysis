@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 from enum import Flag, auto
+from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class AnalysisFeature(Flag):
@@ -45,6 +46,8 @@ class TechnicalScores(BaseModel):
 
 
 class CompositionScores(BaseModel):
+    model_config = ConfigDict(arbitrary_types_allowed=True)
+
     saliency_centroid_x: float  # normalised 0-1 from left
     saliency_centroid_y: float  # normalised 0-1 from top
     rot_alignment_score: float  # 0=perfect RoT, 1=worst
@@ -58,6 +61,9 @@ class CompositionScores(BaseModel):
     dominant_line_angles: list[float]  # degrees, from HoughLinesP
     leading_lines_converge_to_subject: bool
     line_pattern: str  # "diagonal"|"horizontal"|"vertical"|"mixed"|"none"
+
+    # Visualisation only — excluded from model_dump() / JSON serialisation
+    saliency_map: Any | None = Field(default=None, exclude=True)
 
 
 class AnalysisReport(BaseModel):

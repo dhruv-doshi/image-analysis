@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import type { AnalyseResponse, QualityTier } from '@/types/api'
+import OverlayViewer from '@/components/OverlayViewer'
 
 type Tab = 'composition' | 'technical' | 'report'
 
@@ -70,7 +71,7 @@ function ReportSection({ title, content }: { title: string; content: string }) {
   )
 }
 
-export default function AnalysisResult({ result }: { result: AnalyseResponse }) {
+export default function AnalysisResult({ result, imageUrl }: { result: AnalyseResponse; imageUrl: string }) {
   const [tab, setTab] = useState<Tab>('report')
   const { exif, quality_tier, technical, composition, report } = result
 
@@ -93,6 +94,9 @@ export default function AnalysisResult({ result }: { result: AnalyseResponse }) 
 
   return (
     <div className="space-y-6">
+      {/* Overlay viewer */}
+      <OverlayViewer imageUrl={imageUrl} comp={composition} />
+
       {/* Header: quality tier + summary */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
         <div className="flex items-center gap-3">
