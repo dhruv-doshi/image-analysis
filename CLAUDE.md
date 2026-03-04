@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-FrameIQ is a Streamlit web app that accepts an uploaded photograph and returns an AI-powered analysis covering composition, aesthetics, technical quality, improvement tips, and photographer/style recommendations.
+FrameIQ is a FastAPI + Next.js web app that accepts an uploaded photograph and returns an AI-powered analysis covering composition, aesthetics, technical quality, improvement tips, and photographer/style recommendations.
 
 ## Commands
 
@@ -19,8 +19,10 @@ pip install -r requirements.txt
 cp .env.example .env
 # Edit .env and set ANTHROPIC_API_KEY
 
-# Run the app
-streamlit run app.py
+# Run the API server
+uvicorn api:app --reload
+# or use the convenience script:
+./run_local.sh
 
 # Run tests
 pytest
@@ -29,20 +31,22 @@ pytest
 pytest tests/test_<module>.py -v
 
 # Lint
-ruff check src/ app.py
+ruff check src/ api.py
 
 # Format
-ruff format src/ app.py
+ruff format src/ api.py
 ```
 
 ## Repo Structure
 
 ```
 image-analysis/
-├── app.py                        # Streamlit entry point
+├── api.py                        # FastAPI entry point
+├── frontend/                     # Next.js frontend
 ├── requirements.txt
 ├── pyproject.toml                # ruff, mypy, bandit, pytest config
 ├── pytest.ini                    # testpaths + pythonpath
+├── run_local.sh                  # convenience dev-server launcher
 ├── .env.example                  # env var template
 ├── CLAUDE.md
 ├── README.md
@@ -71,6 +75,8 @@ image-analysis/
 
 ## Architecture
 
+**Entry point**: `api.py` (FastAPI) receives uploaded images and orchestrates the three-layer pipeline; results are served to the Next.js frontend (`frontend/`).
+
 Three-layer pipeline:
 
 1. **Layer 1 — Technical** (`src/analysis/technical.py`): pyiqa learned metrics (BRISQUE, NIMA, CLIP-IQA+) + classical CV (sharpness, noise, exposure, dynamic range, contrast).
@@ -80,7 +86,7 @@ Three-layer pipeline:
 ## Key conventions
 
 - All API keys are loaded from `.env` via `python-dotenv`; never hard-code them.
-- `uploads/` and `temp/` are gitignored — never commit user images or temp files.
+- `uploads/` is gitignored — never commit user images.
 - Model weights (pyiqa, rembg U²-Net) are downloaded at runtime; never commit weight files.
 - The LLM model is controlled by the `LLM_MODEL` env var (default: `claude-opus-4-6`).
 - pyiqa models are initialised once at module import (module-level `_brisque`, `_nima`, `_clip_iqa`); each call is wrapped in try/except.
