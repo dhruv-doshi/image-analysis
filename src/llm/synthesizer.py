@@ -89,6 +89,34 @@ def _exposure_ord(hl: float, sh: float, mean: float) -> int:
     return 0
 
 
+def _nima_ord(v: float | None) -> int | None:
+    if v is None or math.isnan(v):
+        return None
+    if v >= 7.0:
+        return 0
+    if v >= 6.0:
+        return 1
+    if v >= 5.0:
+        return 2
+    if v >= 4.0:
+        return 3
+    return 4
+
+
+def _clip_ord(v: float | None) -> int | None:
+    if v is None or math.isnan(v):
+        return None
+    if v >= 0.60:
+        return 0
+    if v >= 0.50:
+        return 1
+    if v >= 0.40:
+        return 2
+    if v >= 0.30:
+        return 3
+    return 4
+
+
 def _compute_quality_tier(tech: TechnicalScores) -> dict:
     b = _brisque_ord(tech.brisque)
     s = _sharpness_ord(tech.sharpness_laplacian, tech.noise_sigma)
@@ -98,14 +126,31 @@ def _compute_quality_tier(tech: TechnicalScores) -> dict:
         tech.exposure_clipped_shadows_pct,
         tech.histogram_mean,
     )
-    overall = int((b * 3 + s * 2 + n * 2 + e * 1) / 8.0 + 0.5)
-    return {
+    na = _nima_ord(tech.nima_aesthetic)
+    ci = _clip_ord(tech.clip_iqa)
+
+    # Base weights: BRISQUE 3x, sharpness 2x, noise 2x, exposure 1x = 8
+    weighted, weight_sum = b * 3 + s * 2 + n * 2 + e, 8
+    if na is not None:
+        weighted += na * 2
+        weight_sum += 2
+    if ci is not None:
+        weighted += ci * 1
+        weight_sum += 1
+    overall = int(weighted / weight_sum + 0.5)
+
+    result = {
         "overall": _t(overall),
         "brisque_tier": _t(b),
         "sharpness_tier": _t(s),
         "noise_tier": _t(n),
         "exposure_tier": _t(e),
     }
+    if na is not None:
+        result["nima_tier"] = _t(na)
+    if ci is not None:
+        result["clip_tier"] = _t(ci)
+    return result
 
 
 def _build_payload(

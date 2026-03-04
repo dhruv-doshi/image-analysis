@@ -183,8 +183,8 @@ def _leading_lines(bgr_array: np.ndarray, cx: float, cy: float) -> tuple[list[fl
         edges,
         rho=1,
         theta=np.pi / 180,
-        threshold=50,
-        minLineLength=50,
+        threshold=80,
+        minLineLength=100,
         maxLineGap=10,
     )
     if lines is None:
@@ -210,7 +210,18 @@ def _leading_lines(bgr_array: np.ndarray, cx: float, cy: float) -> tuple[list[fl
 
     converges = converging >= max(2, int(len(angles) * 0.3))
     pattern = _classify_pattern(angles)
-    return angles, converges, pattern
+
+    # Cluster into 15-degree bins; return median of each populated bin (≤12 total)
+    _BIN = 15
+    bins: dict[int, list[float]] = {}
+    for a in angles:
+        bins.setdefault(int(a / _BIN), []).append(a)
+    dominant_angles = sorted(
+        cluster[len(cluster) // 2]
+        for cluster in sorted(bins.values(), key=len, reverse=True)
+    )
+
+    return dominant_angles, converges, pattern
 
 
 # ---------------------------------------------------------------------------
