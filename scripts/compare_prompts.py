@@ -23,24 +23,51 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-import src.llm.synthesizer as _syn
 from src.analysis.composition import analyse as analyse_composition
 from src.analysis.technical import analyse as analyse_technical
-from src.models import AnalysisFeature
+from src.llm.client import _MODEL, get_client
+from src.llm.synthesizer import _build_payload
+from src.models import AnalysisFeature, AnalysisReport
 from src.utils.loader import extract_exif, load_image
 
-_PROMPT_V1 = (Path(__file__).parent.parent / "prompts" / "system.md").read_text(encoding="utf-8")
-_PROMPT_V2 = (Path(__file__).parent.parent / "prompts" / "system_v2.md").read_text(encoding="utf-8")
+_PROMPTS_ROOT = Path(__file__).parent.parent / "prompts"
+_PROMPT_V1 = (_PROMPTS_ROOT / "system.md").read_text(encoding="utf-8")
+_PROMPT_V2 = (_PROMPTS_ROOT / "system_v2.md").read_text(encoding="utf-8")
+
+_REPORT_KEYS = ("summary", "composition", "aesthetics", "technical",
+                "improvements", "editing", "inspiration")
 
 
-def _synthesise_with(prompt: str, scores, comp, exif, features):
-    """Call synthesise() with an arbitrary system prompt via module-level swap."""
-    original = _syn._SYSTEM_PROMPT
-    try:
-        _syn._SYSTEM_PROMPT = prompt
-        return _syn.synthesise(scores, comp, exif, features)
-    finally:
-        _syn._SYSTEM_PROMPT = original
+def _call_llm(prompt: str, scores, comp, exif, features) -> AnalysisReport:
+    """Call the LLM with an arbitrary system prompt and parse the result."""
+    client = get_client()
+    user_message = _build_payload(scores, comp, exif, features)
+    response = client.chat.completions.create(
+        model=_MODEL,
+        max_tokens=4096,
+        messages=[
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user_message},
+        ],
+    )
+    raw = (response.choices[0].message.content or "").strip()
+
+    # Strip markdown code fences
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1]
+        raw = raw.rsplit("```", 1)[0].strip()
+
+    data = json.loads(raw)
+
+    # Coerce list or dict field values to plain strings
+    for key in _REPORT_KEYS:
+        val = data.get(key)
+        if isinstance(val, list):
+            data[key] = "\n".join(str(item) for item in val)
+        elif isinstance(val, dict):
+            data[key] = "\n".join(f"{k}: {v}" for k, v in val.items())
+
+    return AnalysisReport(**data)
 
 
 def _pick_image(arg: str | None) -> Path:
@@ -79,10 +106,10 @@ def main() -> None:
     features = AnalysisFeature.FULL
 
     print("Calling LLM — v1 (original prompt)…")
-    report_v1 = _synthesise_with(_PROMPT_V1, scores, comp, exif, features)
+    report_v1 = _call_llm(_PROMPT_V1, scores, comp, exif, features)
 
     print("Calling LLM — v2 (flaw-focused prompt)…")
-    report_v2 = _synthesise_with(_PROMPT_V2, scores, comp, exif, features)
+    report_v2 = _call_llm(_PROMPT_V2, scores, comp, exif, features)
 
     result = {
         "image": str(image_path),

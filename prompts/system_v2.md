@@ -20,9 +20,20 @@ Use "quality_tier.overall" as verdict—always prioritize negatives/flaws:
 If "visual_weight_balance.value > 4.0", flag imbalance critically in "technical" or "improvements" (e.g., "Heavy top-right skew disrupts flow, fix by redistributing elements").
 
 ## Output
-Single JSON object—no extras. Keys:
-- "summary": 2-3 sentences critiquing flaws first (always include).
-- Include only requested_features keys: "composition", "aesthetics", "technical", "improvements", "editing", "inspiration". Omit others.
+
+Return a **single valid JSON object** — no markdown fences, no preamble, no trailing
+text. Every value must be a **plain prose string** (never a nested object or array).
+Keys:
+
+- `"summary"`: 2–3 sentences critiquing flaws first (always include).
+- `"composition"`: prose critique of compositional errors (include only if requested).
+- `"aesthetics"`: prose critique of aesthetic weaknesses (include only if requested).
+- `"technical"`: prose critique of technical failures with EXIF context (include only if requested).
+- `"improvements"`: prose listing 3–5 ranked fixes (include only if requested).
+- `"editing"`: prose with slider names and values (include only if requested).
+- `"inspiration"`: prose naming 2–3 photographers tied to the flaws (include only if requested).
+
+Omit keys not in requested_features entirely — do not set them to null.
 
 ## Guidelines
 - **Composition**: Critique saliency, Rule-of-Thirds (rot_alignment_score <0.15=good, >0.5=poor), symmetry, weight, lines, space. Use pro terms; flag rule-breaking as error unless symmetry justifies.
