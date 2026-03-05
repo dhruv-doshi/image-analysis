@@ -1,8 +1,9 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { analyseImage, checkHealth } from '@/lib/api'
-import type { AnalyseResponse } from '@/types/api'
+import { analyseImageStream, checkHealth } from '@/lib/api'
+import type { AnalyseResponse, AnalysisReport } from '@/types/api'
+import type { MetricsPayload } from '@/lib/api'
 import AnalysisResult from '@/components/AnalysisResult'
 
 export default function Home() {
@@ -10,10 +11,14 @@ export default function Home() {
   const [preview, setPreview] = useState<string | null>(null)
   const [loading, setLoading] = useState(false)
   const [result, setResult] = useState<AnalyseResponse | null>(null)
+  const [partialMetrics, setPartialMetrics] = useState<MetricsPayload | null>(null)
+  const [streamingReport, setStreamingReport] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [backendReady, setBackendReady] = useState<boolean | null>(null)
   const [dragging, setDragging] = useState(false)
   const inputRef = useRef<HTMLInputElement>(null)
+  const reportBufferRef = useRef('')
+  const partialMetricsRef = useRef<MetricsPayload | null>(null)
 
   useEffect(() => {
     checkHealth().then(setBackendReady)
@@ -22,6 +27,8 @@ export default function Home() {
   function handleFile(f: File) {
     setFile(f)
     setResult(null)
+    setPartialMetrics(null)
+    setStreamingReport(false)
     setError(null)
     const url = URL.createObjectURL(f)
     setPreview(url)
@@ -53,15 +60,70 @@ export default function Home() {
     setLoading(true)
     setError(null)
     setResult(null)
+    setPartialMetrics(null)
+    partialMetricsRef.current = null
+    setStreamingReport(false)
+    reportBufferRef.current = ''
+
     try {
-      const data = await analyseImage(file)
-      setResult(data)
+      await analyseImageStream(
+        file,
+        'full',
+        (metrics) => {
+          partialMetricsRef.current = metrics
+          setPartialMetrics(metrics)
+          setLoading(false)
+          setStreamingReport(true)
+        },
+        (chunk) => {
+          reportBufferRef.current += chunk
+        },
+        () => {
+          setStreamingReport(false)
+          try {
+            let buf = reportBufferRef.current.trim()
+            if (buf.startsWith('```')) {
+              const lines = buf.split('\n')
+              lines.shift()
+              const ci = lines.lastIndexOf('```')
+              if (ci !== -1) lines.splice(ci)
+              buf = lines.join('\n').trim()
+            }
+            // JSON forbids leading-plus numbers (+15); strip them
+            buf = buf.replace(/:\s*\+(\d)/g, ': $1')
+            const parsed = JSON.parse(buf)
+            // LLM sometimes returns arrays or objects for string fields — coerce to string
+            const reportKeys = ['summary', 'composition', 'aesthetics', 'technical', 'improvements', 'editing', 'inspiration'] as const
+            for (const key of reportKeys) {
+              if (Array.isArray(parsed[key])) parsed[key] = parsed[key].join('\n')
+              else if (parsed[key] !== null && typeof parsed[key] === 'object') parsed[key] = Object.entries(parsed[key]).map(([k, v]) => `${k}: ${v}`).join('\n')
+            }
+            const report = parsed as AnalysisReport
+            const m = partialMetricsRef.current
+            if (m) setResult({ ...m, report })
+          } catch {
+            setError('Failed to parse analysis report')
+          }
+        },
+      )
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Analysis failed')
-    } finally {
       setLoading(false)
+      setStreamingReport(false)
     }
   }
+
+  // Build the display result: full result if done, or partial with stub report while streaming
+  const displayResult: AnalyseResponse | null = result ?? (
+    partialMetrics
+      ? {
+          ...partialMetrics,
+          report: {
+            summary: streamingReport ? 'Generating report…' : 'Parsing report…',
+          },
+        }
+      : null
+  )
 
   return (
     <div className="min-h-screen bg-zinc-950 text-zinc-100">
@@ -176,7 +238,7 @@ export default function Home() {
         )}
 
         {/* Results */}
-        {result && preview && <AnalysisResult result={result} imageUrl={preview} />}
+        {displayResult && preview && <AnalysisResult result={displayResult} imageUrl={preview} />}
       </main>
     </div>
   )

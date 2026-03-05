@@ -33,6 +33,7 @@ class TechnicalScores(BaseModel):
     brisque: float  # 0-100, lower = better
     nima_aesthetic: float | None = None  # 1-10, higher = better
     clip_iqa: float | None = None  # 0-1, higher = better
+    musiq: float | None = None  # 0-100, higher = better
     # Classical CV
     sharpness_laplacian: float  # variance of Laplacian; higher = sharper
     sharpness_regional: dict  # per-quadrant {top_left, top_right, bottom_left, bottom_right}
@@ -61,6 +62,11 @@ class CompositionScores(BaseModel):
     dominant_line_angles: list[float]  # degrees, from HoughLinesP
     leading_lines_converge_to_subject: bool
     line_pattern: str  # "diagonal"|"horizontal"|"vertical"|"mixed"|"none"
+    horizon_tilt_degrees: float | None = None  # signed tilt; 0=level, +/- = clockwise/counter
+    scene_type: str = "general"  # portrait|landscape|architecture|macro|general
+    dominant_colors: list[list[int]] = Field(default_factory=list)  # top-5 Lab [L,a,b]
+    color_harmony_type: str = "complex"  # monochromatic|analogous|complementary|triadic|split-complementary|complex
+    color_harmony_score: float = 0.0  # 0–1, higher = stronger match
 
     # Visualisation only — excluded from model_dump() / JSON serialisation
     saliency_map: Any | None = Field(default=None, exclude=True)

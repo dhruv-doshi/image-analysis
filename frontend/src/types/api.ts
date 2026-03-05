@@ -22,6 +22,7 @@ export interface TechnicalScores {
   brisque: number
   nima_aesthetic?: number
   clip_iqa?: number
+  musiq?: number | null
   sharpness_laplacian: number
   sharpness_regional: { top_left: number; top_right: number; bottom_left: number; bottom_right: number }
   noise_sigma: number
@@ -47,7 +48,17 @@ export interface CompositionScores {
   dominant_line_angles: number[]
   leading_lines_converge_to_subject: boolean
   line_pattern: 'diagonal' | 'horizontal' | 'vertical' | 'mixed' | 'none'
+  horizon_tilt_degrees?: number | null
+  scene_type?: string
+  color_harmony_type?: string
+  color_harmony_score?: number
 }
+
+export type AnalyseStreamEvent =
+  | { type: 'metrics'; exif: ExifData; quality_tier: QualityTier; technical: TechnicalScores; composition: CompositionScores }
+  | { type: 'chunk'; text: string }
+  | { type: 'error'; message: string }
+  | { type: 'done' }
 
 export interface AnalysisReport {
   summary: string

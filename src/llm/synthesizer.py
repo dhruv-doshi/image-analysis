@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import logging
 import math
+import re
 from pathlib import Path
 
 from src.llm.client import _MODEL, get_client
@@ -15,6 +16,43 @@ from src.models import (
 )
 
 logger = logging.getLogger(__name__)
+
+_REPORT_KEYS = (
+    "summary", "composition", "aesthetics", "technical",
+    "improvements", "editing", "inspiration",
+)
+
+
+def _sanitise_llm_json(raw: str) -> str:
+    """Fix common LLM JSON mistakes before parsing.
+
+    1. Strip markdown code fences (```json ... ``` or ``` ... ```)
+    2. Leading-plus numbers (+15 → 15) — not valid JSON
+    3. Missing comma between fields (]\\n  "key" → ],\\n  "key")
+    4. Trailing commas before } or ]
+    """
+    raw = raw.strip()
+    if raw.startswith("```"):
+        raw = raw.split("\n", 1)[-1]           # drop opening fence line
+        raw = raw.rsplit("```", 1)[0].strip()  # drop closing fence
+    # JSON spec forbids +N numbers
+    raw = re.sub(r":\s*\+(\d)", r": \1", raw)
+    # Missing comma after ] or } before the next "key": pattern
+    raw = re.sub(r'([}\]])\s*\n(\s*"[a-z_]+")', r'\1,\n\2', raw)
+    # Trailing commas before closing brace/bracket
+    raw = re.sub(r",\s*([}\]])", r"\1", raw)
+    return raw
+
+
+def _coerce_report_fields(data: dict) -> dict:
+    """Coerce list or dict values in report string fields to plain strings."""
+    for key in _REPORT_KEYS:
+        val = data.get(key)
+        if isinstance(val, list):
+            data[key] = "\n".join(str(item) for item in val)
+        elif isinstance(val, dict):
+            data[key] = "\n".join(f"{k}: {v}" for k, v in val.items())
+    return data
 
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 _SYSTEM_PROMPT: str = (_PROMPTS_DIR / "system.md").read_text(encoding="utf-8")
@@ -178,6 +216,10 @@ def _build_payload(
                 "value": tech.clip_iqa,
                 "scale": "0–1, higher is better; >0.6=good perceptual quality",
             },
+            "musiq": {
+                "value": tech.musiq,
+                "scale": "0–100, higher is better (contrast: BRISQUE is lower-is-better)",
+            },
             "sharpness_laplacian": {
                 "value": tech.sharpness_laplacian,
                 "scale": "Laplacian variance; <200=blurry, 200–500=acceptable, >500=sharp",
@@ -268,6 +310,22 @@ def _build_payload(
                 "value": comp.dominant_line_angles,
                 "scale": "line angles in degrees 0–180; 0/180=horizontal, 90=vertical",
             },
+            "horizon_tilt_degrees": {
+                "value": comp.horizon_tilt_degrees,
+                "scale": "degrees from level; 0=perfectly level, positive=clockwise tilt, null=no clear horizon detected",
+            },
+            "scene_type": {
+                "value": comp.scene_type,
+                "scale": "portrait|landscape|architecture|macro|general",
+            },
+            "color_harmony_type": {
+                "value": comp.color_harmony_type,
+                "scale": "monochromatic|analogous|complementary|triadic|split-complementary|complex",
+            },
+            "color_harmony_score": {
+                "value": comp.color_harmony_score,
+                "scale": "0–1, higher = stronger match to the named template",
+            },
         },
         "requested_features": requested,
     }
@@ -301,7 +359,13 @@ def synthesise(
     client = get_client()
     user_message = _build_payload(tech, comp, exif, features)
 
-    logger.debug("Calling LLM %s with %d-byte payload", _MODEL, len(user_message))
+    logger.info(
+        "LLM request  model=%s  system_prompt=%d chars  user_payload=%d chars  max_tokens=4096",
+        _MODEL,
+        len(_SYSTEM_PROMPT),
+        len(user_message),
+    )
+    logger.debug("LLM user payload:\n%s", user_message)
 
     response = client.chat.completions.create(
         model=_MODEL,
@@ -312,16 +376,21 @@ def synthesise(
         ],
     )
     raw_text: str = (response.choices[0].message.content or "").strip()
-    logger.debug(
-        "LLM responded with %d chars (finish_reason=%s)",
-        len(raw_text),
-        response.choices[0].finish_reason,
-    )
+    finish_reason = response.choices[0].finish_reason
+    usage = response.usage
+    if usage:
+        logger.info(
+            "LLM response  finish_reason=%s  tokens: prompt=%d  completion=%d  total=%d",
+            finish_reason,
+            usage.prompt_tokens,
+            usage.completion_tokens,
+            usage.total_tokens,
+        )
+    else:
+        logger.info("LLM response  finish_reason=%s  response=%d chars", finish_reason, len(raw_text))
+    logger.debug("LLM raw response:\n%s", raw_text)
 
-    # Strip markdown code fences if Claude wrapped the JSON
-    if raw_text.startswith("```"):
-        raw_text = raw_text.split("\n", 1)[-1]  # drop opening fence line
-        raw_text = raw_text.rsplit("```", 1)[0].strip()  # drop closing fence
+    raw_text = _sanitise_llm_json(raw_text)
 
     if not raw_text:
         raise ValueError(
@@ -331,20 +400,7 @@ def synthesise(
     try:
         data = json.loads(raw_text)
     except json.JSONDecodeError:
-        logger.error("Claude returned non-JSON: %.400s", raw_text)
+        logger.error("LLM returned non-JSON: %.400s", raw_text)
         raise
 
-    # Claude occasionally returns list values for string fields; join them.
-    for key in (
-        "summary",
-        "composition",
-        "aesthetics",
-        "technical",
-        "improvements",
-        "editing",
-        "inspiration",
-    ):
-        if isinstance(data.get(key), list):
-            data[key] = "\n".join(str(item) for item in data[key])
-
-    return AnalysisReport(**data)
+    return AnalysisReport(**_coerce_report_fields(data))

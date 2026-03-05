@@ -13,9 +13,10 @@ line-length = 100
 src = ["src"]
 
 [tool.ruff.lint.per-file-ignores]
-# load_dotenv() must run before local src imports so LLM_MODEL env var is
+# E402: load_dotenv() must run before local src imports so LLM_MODEL env var is
 # available at module-import time (client.py reads it at the module level).
-"app.py" = ["E402"]
+# B008: FastAPI uses File(...) / Form(...) as dependency injection in default args.
+"api.py" = ["E402", "B008"]
 
 [tool.ruff.lint]
 select = [
@@ -31,8 +32,6 @@ select = [
 ]
 ignore = [
     "E501",  # line too long — handled by the formatter, not the linter
-    "B008",  # do not perform function calls in default args — conflicts with
-             # Streamlit patterns such as st.file_uploader(...) in function sigs
 ]
 
 [tool.ruff.lint.isort]
@@ -61,17 +60,11 @@ no_implicit_optional = true
 # Suppressing import errors here avoids noise without hiding real type bugs.
 ignore_missing_imports = true
 
-[[tool.mypy.overrides]]
-# app.py is Streamlit glue code — top-level imperative style without typed
-# function boundaries. Relax the untyped-defs rule only here.
-module = ["app"]
-disallow_untyped_defs = false
-
 # ---------------------------------------------------------------------------
 # Bandit — security scanning
 # ---------------------------------------------------------------------------
 [tool.bandit]
-targets = ["src", "app.py"]
+targets = ["src", "api.py"]
 skips = [
     # B101: assert statements are flagged by bandit as a security risk in
     # production code. We suppress it here because assert is used in the test

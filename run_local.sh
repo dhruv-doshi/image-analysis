@@ -46,7 +46,7 @@ fi
 info "Starting backend on http://localhost:8000 ..."
 "$VENV_UVICORN" api:app --host 0.0.0.0 --port 8000 \
   --app-dir "$REPO_DIR" \
-  --log-level warning &
+  --log-level info &
 BACKEND_PID=$!
 
 # Wait until /health responds

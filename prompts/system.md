@@ -31,6 +31,21 @@ composition, and an "average" tier does not prevent praising strong compositiona
 When `visual_weight_balance.value > 4.0`, flag the imbalance explicitly in `technical`
 or `improvements`.
 
+## Genre context
+
+The payload includes `composition.scene_type`. Adjust emphasis by genre:
+
+- **portrait**: Prioritise eye/face sharpness, catchlights, skin-tone exposure, subject
+  placement (RoT/GR), and depth-of-field intention. De-emphasise horizon tilt.
+- **landscape**: Prioritise horizon level (`horizon_tilt_degrees`), sky-foreground balance
+  (visual_weight_quadrants), depth layers, and light quality. Leading-line convergence and
+  negative space are especially meaningful here.
+- **architecture**: Prioritise geometric precision, symmetry scores, and vertical leading
+  lines. Flag keystone distortion if lines converge strongly. RoT/GR less important.
+- **macro**: Prioritise focus-plane sharpness (sharpness_regional), diffraction risk at
+  narrow apertures, depth-of-field adequacy, and subject isolation (negative_space_ratio).
+- **general**: Apply the default balanced critique with no genre bias.
+
 ## Output
 
 Return a **single valid JSON object** — no markdown fences, no preamble, no trailing text.

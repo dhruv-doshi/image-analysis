@@ -7,7 +7,7 @@ os.environ.setdefault("HF_HOME", "/app/.hf_cache")
 print("Warming up pyiqa models...")
 import pyiqa
 
-for name in ("brisque", "nima", "clipiqa+"):
+for name in ("brisque", "nima", "clipiqa+", "musiq"):
     try:
         pyiqa.create_metric(name, device="cpu")
         print(f"  ✓ {name}")

@@ -338,6 +338,19 @@ class TestEdgeCases:
 # Parametrised smoke test — all fixture images
 # ===========================================================================
 
+class TestMusiq:
+
+    def test_musiq_returns_float_or_none(self, solid_grey_bgr, solid_grey_tensor):
+        result = analyse(solid_grey_bgr, solid_grey_tensor)
+        assert result.musiq is None or isinstance(result.musiq, float), (
+            f"musiq must be float or None, got {type(result.musiq)}"
+        )
+
+    def test_musiq_in_smoke_analyse(self, solid_grey_bgr, solid_grey_tensor):
+        result = analyse(solid_grey_bgr, solid_grey_tensor)
+        assert isinstance(result, TechnicalScores)
+
+
 @pytest.mark.parametrize(
     "image_arrays",
     [

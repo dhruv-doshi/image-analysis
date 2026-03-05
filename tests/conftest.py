@@ -43,6 +43,7 @@ def _pyiqa_create_metric(*args, **kwargs) -> MagicMock:
         "brisque":  _iqa_metric_stub(50.0),
         "nima":     _iqa_metric_stub(6.0),
         "clipiqa+": _iqa_metric_stub(0.7),
+        "musiq":    _iqa_metric_stub(65.0),
     }.get(name, _iqa_metric_stub(0.5))
 
 
@@ -226,6 +227,7 @@ def _patch_technical_metrics(monkeypatch):
         monkeypatch.setattr(_tech, "_brisque",  _stub(50.0), raising=False)
         monkeypatch.setattr(_tech, "_nima",     _stub(6.0),  raising=False)
         monkeypatch.setattr(_tech, "_clip_iqa", _stub(0.7),  raising=False)
+        monkeypatch.setattr(_tech, "_musiq",    _stub(65.0), raising=False)
     except ImportError:
         # src not on PYTHONPATH yet; loader/model tests still pass fine.
         pass

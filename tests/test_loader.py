@@ -233,3 +233,57 @@ class TestExtractExifWithPiexif:
         result = extract_exif(exif_image)
         assert result.image_width == exif_image.width
         assert result.image_height == exif_image.height
+
+
+# ===========================================================================
+# load_image — resize behaviour (_MAX_ANALYSIS_DIM cap)
+# ===========================================================================
+
+class TestLoadImageResize:
+
+    def _large_jpg(self, tmp_path, w: int, h: int) -> str:
+        img = Image.new("RGB", (w, h), color=(100, 150, 200))
+        path = tmp_path / f"large_{w}x{h}.jpg"
+        img.save(str(path), format="JPEG")
+        return str(path)
+
+    def test_small_image_not_resized(self, grey_jpg):
+        """200×200 image is below the cap — dimensions must be unchanged."""
+        pil, bgr, _ = load_image(grey_jpg)
+        assert max(pil.width, pil.height) == 200
+        assert bgr.shape[:2] == (pil.height, pil.width)
+
+    def test_large_landscape_long_edge_capped(self, tmp_path):
+        """2000×1000 image should be downsampled to 1024 on the long edge."""
+        from src.utils.loader import _MAX_ANALYSIS_DIM
+        path = self._large_jpg(tmp_path, 2000, 1000)
+        pil, bgr, tensor = load_image(path)
+        assert max(pil.width, pil.height) <= _MAX_ANALYSIS_DIM
+
+    def test_large_portrait_long_edge_capped(self, tmp_path):
+        """1000×2000 portrait should be downsampled to 1024 on the long edge."""
+        from src.utils.loader import _MAX_ANALYSIS_DIM
+        path = self._large_jpg(tmp_path, 1000, 2000)
+        pil, bgr, tensor = load_image(path)
+        assert max(pil.width, pil.height) <= _MAX_ANALYSIS_DIM
+
+    def test_aspect_ratio_preserved(self, tmp_path):
+        """Resizing must not change the aspect ratio beyond rounding error."""
+        path = self._large_jpg(tmp_path, 2048, 1024)
+        pil, _, _ = load_image(path)
+        original_ratio = 2048 / 1024
+        resized_ratio = pil.width / pil.height
+        assert abs(resized_ratio - original_ratio) < 0.02
+
+    def test_bgr_shape_consistent_with_pil_after_resize(self, tmp_path):
+        """BGR array dims must match the (possibly resized) PIL dimensions."""
+        path = self._large_jpg(tmp_path, 1600, 1200)
+        pil, bgr, _ = load_image(path)
+        assert bgr.shape == (pil.height, pil.width, 3)
+
+    def test_tensor_shape_consistent_with_pil_after_resize(self, tmp_path):
+        """Tensor H×W must match the resized PIL image."""
+        path = self._large_jpg(tmp_path, 1600, 1200)
+        pil, _, tensor = load_image(path)
+        assert tensor.shape[2] == pil.height
+        assert tensor.shape[3] == pil.width

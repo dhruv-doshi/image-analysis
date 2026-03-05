@@ -63,7 +63,7 @@ function ReportSection({ title, content }: { title: string; content: string }) {
     <div className="space-y-2">
       <h3 className="text-sm font-semibold text-zinc-300 capitalize">{title}</h3>
       <div className="text-sm text-zinc-400 space-y-1">
-        {content.split('\n').map((line, i) => (
+        {String(content).split('\n').map((line, i) => (
           <p key={i}>{line}</p>
         ))}
       </div>
@@ -142,6 +142,15 @@ export default function AnalysisResult({ result, imageUrl }: { result: AnalyseRe
         {/* Composition tab */}
         {tab === 'composition' && (
           <div className="space-y-5">
+            {/* Scene type badge */}
+            {composition.scene_type && (
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-zinc-500">Scene</span>
+                <span className="inline-block px-2 py-0.5 text-xs font-medium rounded border border-indigo-700 bg-indigo-900/40 text-indigo-300 capitalize">
+                  {composition.scene_type}
+                </span>
+              </div>
+            )}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <MetricCard
                 label="Best alignment"
@@ -169,7 +178,26 @@ export default function AnalysisResult({ result, imageUrl }: { result: AnalyseRe
                   value={composition.dominant_line_angles.map(a => `${Math.round(a)}°`).join(', ')}
                 />
               )}
+              {composition.horizon_tilt_degrees != null ? (
+                <MetricCard
+                  label="Horizon tilt"
+                  value={`${composition.horizon_tilt_degrees >= 0 ? '+' : ''}${composition.horizon_tilt_degrees.toFixed(1)}°`}
+                />
+              ) : (
+                <MetricCard label="Horizon tilt" value="—" />
+              )}
+              {composition.color_harmony_type && (
+                <MetricCard
+                  label="Color harmony"
+                  value={composition.color_harmony_type}
+                />
+              )}
             </div>
+            {composition.color_harmony_score != null && composition.color_harmony_type && composition.color_harmony_type !== 'complex' && (
+              <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-4">
+                <ProgressBar value={composition.color_harmony_score} label={`${composition.color_harmony_type} harmony score`} />
+              </div>
+            )}
 
             <div className="space-y-3 bg-zinc-900 border border-zinc-800 rounded-xl p-4">
               <h3 className="text-xs font-semibold text-zinc-500 uppercase tracking-wider">Symmetry</h3>
@@ -228,6 +256,12 @@ export default function AnalysisResult({ result, imageUrl }: { result: AnalyseRe
               <MetricCard
                 label="CLIP-IQA+"
                 value={technical.clip_iqa.toFixed(3)}
+              />
+            )}
+            {technical.musiq != null && (
+              <MetricCard
+                label="MUSIQ"
+                value={technical.musiq.toFixed(1)}
               />
             )}
           </div>

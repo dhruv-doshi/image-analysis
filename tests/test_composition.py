@@ -280,6 +280,121 @@ class TestLeadingLines:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# 5b.  New tests for A2/A3/A4
+# ---------------------------------------------------------------------------
+
+
+class TestHorizonTilt:
+    """_horizon_tilt() returns signed tilt or None."""
+
+    def test_horizon_tilt_near_zero_for_level_angles(self):
+        import src.analysis.composition as comp
+
+        # Near-horizontal angles (< 20° → clockwise near-level)
+        angles = [1.0, 2.0, 0.5, 1.5]
+        tilt = comp._horizon_tilt(angles)
+        assert tilt is not None
+        assert abs(tilt) < 5.0, f"Expected near-zero tilt, got {tilt}"
+
+    def test_horizon_tilt_none_on_blank(self, blank_bgr):
+        import src.analysis.composition as comp
+
+        angles = comp._detect_lines(blank_bgr)  # solid grey → no lines
+        tilt = comp._horizon_tilt(angles)
+        assert tilt is None, f"Expected None for blank image, got {tilt}"
+
+    def test_horizon_tilt_none_when_fewer_than_two_lines(self):
+        import src.analysis.composition as comp
+
+        # Only one qualifying line → should return None
+        tilt = comp._horizon_tilt([5.0])
+        assert tilt is None
+
+    def test_horizon_tilt_negative_for_counterclockwise(self):
+        import src.analysis.composition as comp
+
+        # Angles near 180° → counterclockwise (negative tilt)
+        angles = [170.0, 172.0, 168.0]
+        tilt = comp._horizon_tilt(angles)
+        assert tilt is not None
+        assert tilt < 0, f"Expected negative tilt for 170°+ angles, got {tilt}"
+
+
+class TestSceneClassification:
+    """_classify_scene() returns a valid genre string."""
+
+    def test_scene_smoke_grey_returns_general(self, blank_bgr):
+        import src.analysis.composition as comp
+        from PIL import Image
+
+        pil = Image.fromarray(np.zeros((blank_bgr.shape[0], blank_bgr.shape[1], 3), dtype=np.uint8))
+        scene, _ = comp._classify_scene(blank_bgr, pil, [], None)
+        assert scene == "general", f"Solid grey should return 'general', got {scene!r}"
+
+    def test_scene_type_in_valid_set(self, blank_bgr):
+        import src.analysis.composition as comp
+        from PIL import Image
+
+        pil = Image.fromarray(np.zeros((blank_bgr.shape[0], blank_bgr.shape[1], 3), dtype=np.uint8))
+        scene, _ = comp._classify_scene(blank_bgr, pil, [], None)
+        assert scene in {"portrait", "landscape", "architecture", "macro", "general"}
+
+    def test_analyse_smoke_includes_scene_type(self, blank_bgr):
+        import src.analysis.composition as comp
+        from src.models import CompositionScores
+
+        sys.modules["rembg"].remove.return_value = sys.modules["rembg"].remove.return_value
+        pil = Image.fromarray(np.zeros((blank_bgr.shape[0], blank_bgr.shape[1], 3), dtype=np.uint8))
+        alpha = np.full((blank_bgr.shape[0], blank_bgr.shape[1]), 255, dtype=np.uint8)
+        rgba = np.ones((blank_bgr.shape[0], blank_bgr.shape[1], 4), dtype=np.uint8) * 255
+        rgba[:, :, 3] = alpha
+        sys.modules["rembg"].remove.return_value = Image.fromarray(rgba, "RGBA")
+        result = comp.analyse(blank_bgr, pil)
+        assert isinstance(result, CompositionScores)
+        assert result.scene_type in {"portrait", "landscape", "architecture", "macro", "general"}
+
+
+class TestColorHarmony:
+    """_color_harmony() returns valid harmony type and score."""
+
+    _VALID_TYPES = {
+        "monochromatic", "analogous", "complementary",
+        "triadic", "split-complementary", "complex",
+    }
+
+    def test_color_harmony_monochromatic_on_grey(self, blank_bgr):
+        import src.analysis.composition as comp
+
+        _, harmony_type, score = comp._color_harmony(blank_bgr)
+        assert harmony_type == "monochromatic", (
+            f"Solid grey should be monochromatic, got {harmony_type!r}"
+        )
+        assert score == pytest.approx(1.0), (
+            f"Monochromatic score should be 1.0, got {score}"
+        )
+
+    def test_color_harmony_returns_valid_type(self, blank_bgr):
+        import src.analysis.composition as comp
+
+        _, harmony_type, score = comp._color_harmony(blank_bgr)
+        assert harmony_type in self._VALID_TYPES, (
+            f"harmony_type {harmony_type!r} not in valid set"
+        )
+
+    def test_color_harmony_score_in_range(self, blank_bgr):
+        import src.analysis.composition as comp
+
+        _, _, score = comp._color_harmony(blank_bgr)
+        assert 0.0 <= score <= 1.0, f"score {score} out of [0,1] range"
+
+    def test_color_harmony_dominant_colors_length(self, blank_bgr):
+        import src.analysis.composition as comp
+
+        colors, _, _ = comp._color_harmony(blank_bgr)
+        assert len(colors) == 5, f"Expected 5 dominant colors, got {len(colors)}"
+
+
 @pytest.mark.parametrize(
     "mask_fixture,bgr_fixture",
     [
@@ -325,3 +440,10 @@ def test_analyse_smoke(mask_fixture, bgr_fixture, request):
     assert isinstance(result.dominant_line_angles, list)
     assert isinstance(result.leading_lines_converge_to_subject, bool)
     assert result.line_pattern in {"diagonal", "horizontal", "vertical", "mixed", "none"}
+    assert result.horizon_tilt_degrees is None or isinstance(result.horizon_tilt_degrees, float)
+    assert result.scene_type in {"portrait", "landscape", "architecture", "macro", "general"}
+    assert result.color_harmony_type in {
+        "monochromatic", "analogous", "complementary",
+        "triadic", "split-complementary", "complex",
+    }
+    assert 0.0 <= result.color_harmony_score <= 1.0
