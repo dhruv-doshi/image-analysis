@@ -74,6 +74,7 @@ temp/
 
 # Evaluation framework outputs
 tests/evaluation/results/
+results/
 
 # Prompt comparison results (test artifacts — add notes to prompts/VERSIONS.md instead)
 prompts/comparisons/
