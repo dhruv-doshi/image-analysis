@@ -1,10 +1,63 @@
 'use client'
 
 import { useState } from 'react'
+import type { ReactNode } from 'react'
 import type { AnalyseResponse, QualityTier } from '@/types/api'
 import OverlayViewer from '@/components/OverlayViewer'
 
 type Tab = 'composition' | 'technical' | 'report'
+
+const METRIC_INFO: Record<string, { label: string; description: string }> = {
+  // Technical
+  brisque:        { label: 'Overall sharpness quality', description: 'Detects blur and compression artefacts — lower is better (0 = pristine).' },
+  sharpness:      { label: 'Edge sharpness',            description: 'Measures how crisp the edges and fine details are.' },
+  noise:          { label: 'Noise level',               description: 'Amount of grain/noise in the image — lower means cleaner.' },
+  highlights:     { label: 'Blown highlights',          description: 'Percentage of pixels that are pure white with no detail.' },
+  shadows:        { label: 'Crushed shadows',           description: 'Percentage of pixels that are pure black with no detail.' },
+  dynamic_range:  { label: 'Tonal range',               description: 'Gap between the brightest and darkest areas, in exposure stops.' },
+  contrast:       { label: 'Contrast',                  description: 'How much variation there is in brightness across the image.' },
+  histogram_mean: { label: 'Average brightness',        description: 'Overall exposure level — 128 is a balanced mid-tone.' },
+  nima:           { label: 'Aesthetic appeal',          description: 'AI estimate of how visually pleasing the image is (0–10).' },
+  clip_iqa:       { label: 'Perceptual quality',        description: 'How natural and high-quality the image looks to an AI visual model (0–1).' },
+  musiq:          { label: 'Overall image quality',     description: 'Holistic quality score trained on human ratings (0–100).' },
+  // Composition
+  best_alignment: { label: 'Subject placement',         description: 'How well the main subject aligns to classic compositional grids.' },
+  negative_space: { label: 'Breathing room',            description: 'How much empty space surrounds the subject.' },
+  line_pattern:   { label: 'Line type',                 description: 'Dominant type of lines detected (e.g. converging, parallel, curved).' },
+  visual_weight:  { label: 'Balance',                   description: 'How evenly the visual mass is distributed across the frame.' },
+  leading_lines:  { label: 'Lines lead to subject',     description: 'Whether the detected lines guide the eye toward the main subject.' },
+  dominant_angles:{ label: 'Line angles',               description: 'The primary directions of lines in the image (in degrees).' },
+  horizon_tilt:   { label: 'Horizon tilt',              description: 'How many degrees the horizon is off-level.' },
+  color_harmony:  { label: 'Colour harmony',            description: 'How well the colours in the image work together.' },
+}
+
+function MetricLabel({ id }: { id: string }) {
+  const [open, setOpen] = useState(false)
+  const info = METRIC_INFO[id]
+  if (!info) return null
+  return (
+    <span className="flex items-center gap-1">
+      <span>{info.label}</span>
+      <span className="relative inline-flex group">
+        <button
+          type="button"
+          onClick={() => setOpen(o => !o)}
+          className="w-4 h-4 rounded-full bg-zinc-700 text-zinc-400 text-[9px] font-bold inline-flex items-center justify-center hover:bg-indigo-600 hover:text-white transition-colors flex-shrink-0"
+          aria-label={info.description}
+        >
+          i
+        </button>
+        <span
+          className={`absolute bottom-full left-1/2 -translate-x-1/2 mb-2 w-52 p-2 text-xs text-zinc-200 bg-zinc-800 border border-zinc-700 rounded-lg shadow-xl z-10 transition-opacity pointer-events-none ${
+            open ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+          }`}
+        >
+          {info.description}
+        </span>
+      </span>
+    </span>
+  )
+}
 
 const TIER_COLORS: Record<QualityTier['overall'], string> = {
   excellent: 'bg-emerald-900/60 text-emerald-300 border-emerald-700',
@@ -45,7 +98,7 @@ function MetricCard({
   value,
   tier,
 }: {
-  label: string
+  label: ReactNode
   value: string
   tier?: QualityTier['overall']
 }) {
@@ -153,42 +206,42 @@ export default function AnalysisResult({ result, imageUrl }: { result: AnalyseRe
             )}
             <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
               <MetricCard
-                label="Best alignment"
+                label={<MetricLabel id="best_alignment" />}
                 value={composition.best_alignment === 'rule_of_thirds' ? 'Rule of Thirds' : 'Golden Ratio'}
               />
               <MetricCard
-                label="Negative space"
+                label={<MetricLabel id="negative_space" />}
                 value={composition.negative_space_ratio != null ? `${Math.round(composition.negative_space_ratio * 100)}%` : '—'}
               />
               <MetricCard
-                label="Line pattern"
+                label={<MetricLabel id="line_pattern" />}
                 value={composition.line_pattern}
               />
               <MetricCard
-                label="Visual weight balance"
+                label={<MetricLabel id="visual_weight" />}
                 value={composition.visual_weight_balance != null ? composition.visual_weight_balance.toFixed(2) : '—'}
               />
               <MetricCard
-                label="Converges to subject"
+                label={<MetricLabel id="leading_lines" />}
                 value={composition.leading_lines_converge_to_subject ? 'Yes' : 'No'}
               />
               {composition.dominant_line_angles != null && composition.dominant_line_angles.length > 0 && (
                 <MetricCard
-                  label="Dominant angles"
+                  label={<MetricLabel id="dominant_angles" />}
                   value={composition.dominant_line_angles.map(a => `${Math.round(a)}°`).join(', ')}
                 />
               )}
               {composition.horizon_tilt_degrees != null ? (
                 <MetricCard
-                  label="Horizon tilt"
+                  label={<MetricLabel id="horizon_tilt" />}
                   value={`${composition.horizon_tilt_degrees >= 0 ? '+' : ''}${composition.horizon_tilt_degrees.toFixed(1)}°`}
                 />
               ) : (
-                <MetricCard label="Horizon tilt" value="—" />
+                <MetricCard label={<MetricLabel id="horizon_tilt" />} value="—" />
               )}
               {composition.color_harmony_type && (
                 <MetricCard
-                  label="Color harmony"
+                  label={<MetricLabel id="color_harmony" />}
                   value={composition.color_harmony_type}
                 />
               )}
@@ -211,56 +264,56 @@ export default function AnalysisResult({ result, imageUrl }: { result: AnalyseRe
         {tab === 'technical' && (
           <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
             <MetricCard
-              label="BRISQUE"
+              label={<MetricLabel id="brisque" />}
               value={technical.brisque != null ? technical.brisque.toFixed(1) : '—'}
               tier={quality_tier.brisque_tier}
             />
             <MetricCard
-              label="Sharpness (Laplacian)"
+              label={<MetricLabel id="sharpness" />}
               value={technical.sharpness_laplacian != null ? technical.sharpness_laplacian.toFixed(1) : '—'}
               tier={quality_tier.sharpness_tier}
             />
             <MetricCard
-              label="Noise sigma"
+              label={<MetricLabel id="noise" />}
               value={technical.noise_sigma != null ? technical.noise_sigma.toFixed(2) : '—'}
               tier={quality_tier.noise_tier}
             />
             <MetricCard
-              label="Highlights clipped"
+              label={<MetricLabel id="highlights" />}
               value={technical.exposure_clipped_highlights_pct != null ? `${technical.exposure_clipped_highlights_pct.toFixed(2)}%` : '—'}
               tier={quality_tier.exposure_tier}
             />
             <MetricCard
-              label="Shadows clipped"
+              label={<MetricLabel id="shadows" />}
               value={technical.exposure_clipped_shadows_pct != null ? `${technical.exposure_clipped_shadows_pct.toFixed(2)}%` : '—'}
             />
             <MetricCard
-              label="Dynamic range"
+              label={<MetricLabel id="dynamic_range" />}
               value={technical.dynamic_range_stops != null ? `${technical.dynamic_range_stops.toFixed(1)} stops` : '—'}
             />
             <MetricCard
-              label="Contrast RMS"
+              label={<MetricLabel id="contrast" />}
               value={technical.contrast_rms != null ? technical.contrast_rms.toFixed(3) : '—'}
             />
             <MetricCard
-              label="Histogram mean"
+              label={<MetricLabel id="histogram_mean" />}
               value={technical.histogram_mean != null ? technical.histogram_mean.toFixed(1) : '—'}
             />
             {technical.nima_aesthetic != null && (
               <MetricCard
-                label="NIMA aesthetic"
+                label={<MetricLabel id="nima" />}
                 value={technical.nima_aesthetic.toFixed(2)}
               />
             )}
             {technical.clip_iqa != null && (
               <MetricCard
-                label="CLIP-IQA+"
+                label={<MetricLabel id="clip_iqa" />}
                 value={technical.clip_iqa.toFixed(3)}
               />
             )}
             {technical.musiq != null && (
               <MetricCard
-                label="MUSIQ"
+                label={<MetricLabel id="musiq" />}
                 value={technical.musiq.toFixed(1)}
               />
             )}

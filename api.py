@@ -12,8 +12,10 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-load_dotenv()  # must run before any src.llm imports so LLM_MODEL is in os.environ
+# Load .env before any src imports so LLM_MODEL / API keys are already in os.environ
+load_dotenv()
 
+# Configure root logger; format is shared by all frameiq/src loggers
 logging.basicConfig(
     level=os.getenv("LOG_LEVEL", "INFO").upper(),
     format="%(asctime)s  %(name)-20s  %(message)s",
@@ -38,6 +40,8 @@ def _json_safe(obj: object) -> object:
     if isinstance(obj, list):
         return [_json_safe(v) for v in obj]
     return obj
+
+
 logger = logging.getLogger("frameiq.api")
 
 from fastapi import FastAPI, File, Form, HTTPException, UploadFile
@@ -56,6 +60,7 @@ _models_loaded = False
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    # Pre-warm pyiqa and rembg models at startup so the first request isn't slow
     global _models_loaded
     import src.analysis.composition  # noqa: F401 — triggers model pre-warm
     import src.analysis.technical  # noqa: F401 — triggers model pre-warm
@@ -66,6 +71,7 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
 
 app = FastAPI(lifespan=lifespan)
 
+# Allow requests from the Next.js dev server; extend via ALLOWED_ORIGINS env var for prod
 _origins = ["http://localhost:3000"]
 _extra = os.getenv("ALLOWED_ORIGINS", "")
 if _extra:
@@ -79,9 +85,10 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-_MAX_SIZE = 20 * 1024 * 1024
+_MAX_SIZE = 20 * 1024 * 1024  # 20 MB upload cap
 _ALLOWED_TYPES = {"image/jpeg", "image/png"}
 
+# Maps the features= form field values to AnalysisFeature flag bits
 _FEATURE_MAP = {
     "composition": AnalysisFeature.COMPOSITION,
     "aesthetics": AnalysisFeature.AESTHETICS,
@@ -93,6 +100,8 @@ _FEATURE_MAP = {
 
 
 def _parse_features(s: str) -> AnalysisFeature:
+    # Parse a comma-separated feature list (e.g. "composition,technical") into a flag.
+    # "full" or empty string returns FULL (all features enabled).
     parts = [p.strip().lower() for p in s.split(",") if p.strip()]
     if not parts or "full" in parts:
         return AnalysisFeature.FULL
@@ -113,6 +122,12 @@ async def analyse(
     file: UploadFile = File(...),
     features: str = Form("full"),
 ) -> dict:
+    """Synchronous analysis endpoint.
+
+    Runs the full three-layer pipeline (L1 technical → L2 composition → L3 LLM) and
+    returns a single JSON response once everything is complete. Use this when you need
+    the full result at once and latency is not a concern.
+    """
     if file.content_type not in _ALLOWED_TYPES:
         raise HTTPException(400, f"File must be JPEG or PNG, got {file.content_type!r}")
     content = await file.read()
@@ -150,7 +165,7 @@ async def analyse(
             llm_model = os.getenv("LLM_MODEL", "unknown")
             logger.info("L3 LLM call starting  model=%s", llm_model)
             t3 = time.perf_counter()
-            report = synthesise(tech, comp, exif, feature_flag)
+            report = synthesise(tech, comp, exif, feature_flag)  # blocking LLM call
             logger.info("L3 LLM call complete  elapsed=%.2fs", time.perf_counter() - t3)
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -174,6 +189,19 @@ async def analyse_stream(
     file: UploadFile = File(...),
     features: str = Form("full"),
 ) -> StreamingResponse:
+    """Streaming analysis endpoint (Server-Sent Events).
+
+    Runs L1 (technical) and L2 (composition) synchronously, then immediately pushes
+    a 'metrics' SSE event so the frontend can render scores right away. The slow L3
+    LLM response is then streamed token-by-token as 'chunk' events, ending with a
+    'done' event. This gives much lower perceived latency than /analyse.
+
+    SSE event types emitted:
+      {"type": "metrics", "exif": ..., "technical": ..., "composition": ...}
+      {"type": "chunk",   "text": "<token>"}   (repeated, one per LLM token)
+      {"type": "done"}
+      {"type": "error",   "message": "..."}    (only on failure)
+    """
     if file.content_type not in _ALLOWED_TYPES:
         raise HTTPException(400, f"File must be JPEG or PNG, got {file.content_type!r}")
     content = await file.read()
@@ -182,7 +210,6 @@ async def analyse_stream(
 
     size_kb = len(content) / 1024
     logger.info("POST /analyse/stream  file=%s  size=%.1f KB", file.filename, size_kb)
-    t_total = time.perf_counter()
 
     feature_flag = _parse_features(features)
     suffix = ".jpg" if file.content_type == "image/jpeg" else ".png"
@@ -215,6 +242,7 @@ async def analyse_stream(
     except Exception as exc:
         raise HTTPException(500, str(exc)) from exc
 
+    # Serialise L1+L2 results into the first SSE event sent immediately to the client
     metrics_event = json.dumps(_json_safe({
         "type": "metrics",
         "exif": exif.model_dump(),
@@ -226,6 +254,7 @@ async def analyse_stream(
     t_stream_start = time.perf_counter()
 
     async def generate():
+        # Push metrics immediately so the UI can render scores before LLM finishes
         yield f"data: {metrics_event}\n\n"
         logger.info("SSE stream started — metrics event sent")
         chunk_count = 0

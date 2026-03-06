@@ -82,13 +82,8 @@ export default function Home() {
           setStreamingReport(false)
           try {
             let buf = reportBufferRef.current.trim()
-            if (buf.startsWith('```')) {
-              const lines = buf.split('\n')
-              lines.shift()
-              const ci = lines.lastIndexOf('```')
-              if (ci !== -1) lines.splice(ci)
-              buf = lines.join('\n').trim()
-            }
+            // Strip code fences: ```json...``` or ```...``` (tolerates trailing whitespace / CRLF)
+            buf = buf.replace(/^```(?:json|JSON)?\s*\r?\n?/, '').replace(/\r?\n?```[\s\S]*$/, '').trim()
             // JSON forbids leading-plus numbers (+15 → 15)
             buf = buf.replace(/:\s*\+(\d)/g, ': $1')
             // Missing comma after ] or } before next "key" field
