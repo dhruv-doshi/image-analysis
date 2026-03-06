@@ -89,9 +89,20 @@ export default function Home() {
               if (ci !== -1) lines.splice(ci)
               buf = lines.join('\n').trim()
             }
-            // JSON forbids leading-plus numbers (+15); strip them
+            // JSON forbids leading-plus numbers (+15 → 15)
             buf = buf.replace(/:\s*\+(\d)/g, ': $1')
-            const parsed = JSON.parse(buf)
+            // Missing comma after ] or } before next "key" field
+            buf = buf.replace(/([}\]])\s*\n(\s*"[a-z_]+")/g, '$1,\n$2')
+            // Trailing commas before closing brace/bracket
+            buf = buf.replace(/,\s*([}\]])/g, '$1')
+            // eslint-disable-next-line @typescript-eslint/no-explicit-any
+            let parsed: any
+            try {
+              parsed = JSON.parse(buf)
+            } catch (e) {
+              console.error('JSON parse failed:', e, '\nBuffer:', buf.slice(0, 500))
+              throw e
+            }
             // LLM sometimes returns arrays or objects for string fields — coerce to string
             const reportKeys = ['summary', 'composition', 'aesthetics', 'technical', 'improvements', 'editing', 'inspiration'] as const
             for (const key of reportKeys) {
