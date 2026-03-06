@@ -65,6 +65,7 @@ def minimal_tech() -> TechnicalScores:
         histogram_std=58.0,
         dynamic_range_stops=4.8,
         contrast_rms=0.38,
+        niqe=4.5,
     )
 
 

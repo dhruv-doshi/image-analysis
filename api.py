@@ -54,21 +54,22 @@ from fastapi.responses import StreamingResponse
 # as leaked objects at process shutdown (benign but noisy on macOS).
 try:
     import torch
+
     torch.multiprocessing.set_sharing_strategy("file_system")
 except Exception:
     pass
 
 from src.analysis.composition import analyse as analyse_composition
 from src.analysis.technical import analyse as analyse_technical
+from src.config.metrics import log_active_pipeline
 from src.llm.client import synthesise_stream
 from src.llm.synthesizer import (
-    _compute_quality_tier,
     _coerce_report_fields,
+    _compute_quality_tier,
     _sanitise_llm_json,
     synthesise,
 )
-from src.models import AnalysisReport
-from src.models import AnalysisFeature
+from src.models import AnalysisFeature, AnalysisReport
 from src.utils.loader import extract_exif, load_image
 
 _models_loaded = False
@@ -77,6 +78,7 @@ _models_loaded = False
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
     # Pre-warm pyiqa and rembg models at startup so the first request isn't slow
+    log_active_pipeline()
     global _models_loaded
     import src.analysis.composition  # noqa: F401 — triggers model pre-warm
     import src.analysis.technical  # noqa: F401 — triggers model pre-warm
@@ -259,13 +261,17 @@ async def analyse_stream(
         raise HTTPException(500, str(exc)) from exc
 
     # Serialise L1+L2 results into the first SSE event sent immediately to the client
-    metrics_event = json.dumps(_json_safe({
-        "type": "metrics",
-        "exif": exif.model_dump(),
-        "quality_tier": quality_tier,
-        "technical": tech.model_dump(),
-        "composition": comp.model_dump(),
-    }))
+    metrics_event = json.dumps(
+        _json_safe(
+            {
+                "type": "metrics",
+                "exif": exif.model_dump(),
+                "quality_tier": quality_tier,
+                "technical": tech.model_dump(),
+                "composition": comp.model_dump(),
+            }
+        )
+    )
 
     t_stream_start = time.perf_counter()
 

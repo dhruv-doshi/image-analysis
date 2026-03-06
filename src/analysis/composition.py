@@ -8,6 +8,7 @@ import cv2
 import numpy as np
 from PIL import Image
 
+from src.config.metrics import is_enabled
 from src.models import CompositionScores
 
 logger = logging.getLogger(__name__)
@@ -35,6 +36,7 @@ except Exception as _exc:
 def _saliency_map(pil_image: Image.Image) -> np.ndarray:
     """Return float32 saliency map in [0, 1] from rembg alpha channel."""
     import time
+
     t = time.perf_counter()
     try:
         from rembg import remove  # lazy import — heavy dependency
@@ -202,9 +204,9 @@ def _horizon_tilt(angles: list[float]) -> float | None:
     horizontal: list[float] = []
     for a in angles:
         if a < 20:
-            horizontal.append(a)         # slight clockwise → positive
+            horizontal.append(a)  # slight clockwise → positive
         elif a > 160:
-            horizontal.append(a - 180)   # slight counterclockwise → negative
+            horizontal.append(a - 180)  # slight counterclockwise → negative
     if len(horizontal) < 2:
         return None
     return float(np.median(horizontal))
@@ -272,8 +274,7 @@ def _leading_lines(bgr_array: np.ndarray, cx: float, cy: float) -> tuple[list[fl
     for a in angles:
         bins.setdefault(int(a / _bin), []).append(a)
     dominant_angles = sorted(
-        cluster[len(cluster) // 2]
-        for cluster in sorted(bins.values(), key=len, reverse=True)
+        cluster[len(cluster) // 2] for cluster in sorted(bins.values(), key=len, reverse=True)
     )
 
     return dominant_angles, converges, pattern
@@ -332,12 +333,13 @@ def _classify_scene(
         if min_dim < 600:
             mh, mw = h // 2, w // 2
             quads = [
-                gray_f[:mh, :mw], gray_f[:mh, mw:],
-                gray_f[mh:, :mw], gray_f[mh:, mw:],
+                gray_f[:mh, :mw],
+                gray_f[:mh, mw:],
+                gray_f[mh:, :mw],
+                gray_f[mh:, mw:],
             ]
             sharpness = [
-                float(cv2.Laplacian(q, cv2.CV_32F).var()) if q.size > 0 else 0.0
-                for q in quads
+                float(cv2.Laplacian(q, cv2.CV_32F).var()) if q.size > 0 else 0.0 for q in quads
             ]
             mean_s = sum(sharpness) / max(1, len(sharpness))
             max_s = max(sharpness) if sharpness else 0.0
@@ -391,9 +393,7 @@ def _color_harmony(bgr: np.ndarray) -> tuple[list[list[int]], str, float]:
     k = 5
     criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 100, 0.2)
     try:
-        _, labels, centers = cv2.kmeans(
-            pixels, k, None, criteria, 10, cv2.KMEANS_PP_CENTERS
-        )
+        _, labels, centers = cv2.kmeans(pixels, k, None, criteria, 10, cv2.KMEANS_PP_CENTERS)
     except Exception as exc:
         logger.warning("kmeans color harmony failed: %s", exc)
         return [], "complex", 0.0
@@ -411,7 +411,7 @@ def _color_harmony(bgr: np.ndarray) -> tuple[list[list[int]], str, float]:
         lab_u8 = np.uint8([[np.clip(c, 0, 255)]])
         bgr_px = cv2.cvtColor(lab_u8, cv2.COLOR_Lab2BGR)
         hsv_px = cv2.cvtColor(bgr_px, cv2.COLOR_BGR2HSV)
-        hues.append(int(hsv_px[0, 0, 0]) * 2)   # [0,179] → [0,358]
+        hues.append(int(hsv_px[0, 0, 0]) * 2)  # [0,179] → [0,358]
         sats.append(int(hsv_px[0, 0, 1]))
 
     # 1. Monochromatic
@@ -496,25 +496,66 @@ def analyse(
 
     saliency = _saliency_map(pil_image)
     cx, cy = _centroid(saliency)
-    rot_score = _rot_alignment(cx, cy)
-    gr_score = _golden_ratio_alignment(cx, cy)
-    best_alignment = "rule_of_thirds" if rot_score <= gr_score else "golden_ratio"
-    neg_space = _negative_space(saliency)
-    weights, balance = _visual_weight(saliency)
-    h_sym, v_sym = _symmetry(saliency)
 
-    _t_lines = time.perf_counter()
-    angles, converges, pattern = _leading_lines(bgr_array, cx, cy)
-    logger.debug("leading_lines complete  %.2fs", time.perf_counter() - _t_lines)
+    rot_score = _rot_alignment(cx, cy) if is_enabled("rot_alignment_score") else None
+    gr_score = (
+        _golden_ratio_alignment(cx, cy) if is_enabled("golden_ratio_alignment_score") else None
+    )
+    best_alignment = "rule_of_thirds"
+    if is_enabled("best_alignment") and rot_score is not None and gr_score is not None:
+        best_alignment = "rule_of_thirds" if rot_score <= gr_score else "golden_ratio"
 
-    raw_angles = _detect_lines(bgr_array)
-    horizon_tilt = _horizon_tilt(raw_angles)
-    scene_type, _ = _classify_scene(bgr_array, pil_image, raw_angles, exif_data)
-    dom_colors, harmony_type, harmony_score = _color_harmony(bgr_array)
+    neg_space = _negative_space(saliency) if is_enabled("negative_space_ratio") else None
+
+    weights: dict = {}
+    balance: float | None = None
+    if is_enabled("visual_weight_quadrants") or is_enabled("visual_weight_balance"):
+        _w, _b = _visual_weight(saliency)
+        weights = _w if is_enabled("visual_weight_quadrants") else {}
+        balance = _b if is_enabled("visual_weight_balance") else None
+
+    h_sym: float | None = None
+    v_sym: float | None = None
+    if is_enabled("symmetry_horizontal") or is_enabled("symmetry_vertical"):
+        _h, _v = _symmetry(saliency)
+        h_sym = _h if is_enabled("symmetry_horizontal") else None
+        v_sym = _v if is_enabled("symmetry_vertical") else None
+
+    angles: list[float] = []
+    converges: bool = False
+    pattern: str = "none"
+    if any(
+        is_enabled(k)
+        for k in ("dominant_line_angles", "leading_lines_converge_to_subject", "line_pattern")
+    ):
+        _t0 = time.perf_counter()
+        angles, converges, pattern = _leading_lines(bgr_array, cx, cy)
+        logger.debug("leading_lines complete  %.2fs", time.perf_counter() - _t0)
+
+    raw_angles: list[float] = []
+    if is_enabled("horizon_tilt_degrees") or is_enabled("scene_type"):
+        raw_angles = _detect_lines(bgr_array)
+
+    horizon_tilt: float | None = None
+    if is_enabled("horizon_tilt_degrees"):
+        horizon_tilt = _horizon_tilt(raw_angles)
+
+    scene_type: str = "general"
+    if is_enabled("scene_type"):
+        scene_type, _ = _classify_scene(bgr_array, pil_image, raw_angles, exif_data)
+
+    dom_colors: list[list[int]] = []
+    harmony_type: str = "complex"
+    harmony_score: float = 0.0
+    if any(is_enabled(k) for k in ("dominant_colors", "color_harmony_type", "color_harmony_score")):
+        _dc, _ht, _hs = _color_harmony(bgr_array)
+        dom_colors = _dc if is_enabled("dominant_colors") else []
+        harmony_type = _ht if is_enabled("color_harmony_type") else "complex"
+        harmony_score = _hs if is_enabled("color_harmony_score") else 0.0
 
     return CompositionScores(
-        saliency_centroid_x=cx,
-        saliency_centroid_y=cy,
+        saliency_centroid_x=cx if is_enabled("saliency_centroid_x") else None,
+        saliency_centroid_y=cy if is_enabled("saliency_centroid_y") else None,
         rot_alignment_score=rot_score,
         golden_ratio_alignment_score=gr_score,
         best_alignment=best_alignment,
