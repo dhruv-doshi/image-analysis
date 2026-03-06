@@ -10,6 +10,8 @@ The backend is a **three-layer pipeline**:
 2. **Layer 2 — Composition Analysis**: salient-object detection (rembg U²-Net) → geometric and perceptual composition scores.
 3. **Layer 3 — LLM Synthesis**: all numeric scores serialised into an annotated JSON payload, sent to Claude via OpenRouter; structured `AnalysisReport` returned.
 
+A **metrics configuration layer** (`src/config/metrics.py`) sits across Layers 1–3 and controls which metrics are active and how they contribute to the quality tier.
+
 ---
 
 ## 2. Pipeline Diagram
@@ -18,22 +20,22 @@ The backend is a **three-layer pipeline**:
                           ┌─────────────────────────────────────────────────────────────────────┐
                           │                       FastAPI  (api.py)                              │
                           │                                                                      │
-  HTTP POST /analyse ────►│  Image bytes                                                         │
+  HTTP POST /analyse ────►│  Image bytes (≤20 MB, JPEG/PNG)                                     │
   (multipart upload)      │      │                                                               │
                           │      ▼                                                               │
                           │  ┌───────────────────────┐                                          │
                           │  │   Image Loader         │  PIL → RGB → resize (≤1024px) →         │
-                          │  │   src/utils/loader.py  │  BGR ndarray + float32 tensor            │
+                          │  │   src/utils/loader.py  │  pil_image + BGR ndarray + float32 tensor│
                           │  │                        │  EXIF metadata extracted                 │
                           │  └──────────┬────────────┘                                          │
                           │             │                                                        │
                           │             ▼                                                        │
                           │  ┌───────────────────────┐                                          │
                           │  │  Layer 1 — Technical   │  pyiqa learned metrics                  │
-                          │  │  src/analysis/         │  BRISQUE · NIMA · CLIP-IQA+ · MUSIQ     │
-                          │  │    technical.py        │  + classical CV sharpness / noise /      │
-                          │  │                        │    exposure / dynamic range / contrast   │
-                          │  │  Output: TechnicalScores│                                         │
+                          │  │  src/analysis/         │  BRISQUE · NIMA · CLIP-IQA+             │
+                          │  │    technical.py        │  MUSIQ · NIQE                           │
+                          │  │                        │  + classical CV sharpness / noise /      │
+                          │  │  Output: TechnicalScores│   exposure / dynamic range / contrast  │
                           │  └──────────┬────────────┘                                          │
                           │             │                                                        │
                           │             ▼                                                        │
@@ -64,18 +66,21 @@ The backend is a **three-layer pipeline**:
 
 ## 3. Image Loading (`src/utils/loader.py`)
 
-### `load_image(path) → (ndarray, tensor)`
+### `load_image(source) → (pil_image, bgr_array, tensor)`
+
+`source` may be a file path (`str`/`Path`) or a file-like object (e.g. FastAPI `UploadFile`).
 
 | Step | Detail |
 |------|--------|
 | Open | `PIL.Image.open()` → convert to RGB |
 | Resize | Long edge capped at `_MAX_ANALYSIS_DIM = 1024 px` using Lanczos resampling |
-| BGR array | `np.array(img)[:, :, ::-1]` — OpenCV-compatible BGR uint8 |
-| Tensor | `float32` in range [0, 1], shape `(1, 3, H, W)` — pyiqa-compatible |
+| `pil_image` | RGB PIL Image with EXIF preserved in `.info` |
+| `bgr_array` | `np.array(img)[:, :, ::-1]` — uint8 BGR for OpenCV |
+| `tensor` | `float32` in range [0, 1], shape `(1, 3, H, W)` — pyiqa-compatible |
 
 **Why 1024 px?** ViT-based models (MUSIQ, CLIP-IQA+) scale as O(patches²) in attention. A 16 MP image took 418 s before the cap was introduced.
 
-### `extract_exif(path) → ExifData`
+### `extract_exif(pil_image) → ExifData`
 
 - Reads all EXIF tags via Pillow's `_getexif()`.
 - For image dimensions, prefers `ExifImageWidth` / `ExifImageHeight` (original camera dimensions) over the post-resize PIL size.
@@ -85,7 +90,9 @@ The backend is a **three-layer pipeline**:
 
 ## 4. Layer 1 — Technical Analysis (`src/analysis/technical.py`)
 
-All pyiqa models are instantiated **once at module import** as module-level singletons (`_brisque`, `_nima`, `_clip_iqa`, `_musiq`). Each metric call is wrapped in `try/except` — on failure the field is `NaN` / `None`.
+All pyiqa models are instantiated **once at module import** as module-level singletons (`_brisque`, `_nima`, `_clip_iqa`, `_musiq`, `_niqe`). Each metric call is wrapped in `try/except` — on failure the field is `NaN` / `None`.
+
+Every metric is guarded by `is_enabled()` from the config layer (Section 10) before being computed or included in results.
 
 ### 4.1 Learned Metrics (pyiqa)
 
@@ -93,8 +100,9 @@ All pyiqa models are instantiated **once at module import** as module-level sing
 |-------|-------|--------------|-------|----------------|
 | `brisque` | BRISQUE | DCT coefficient statistics fit to a Generalised Gaussian Distribution; deviation from "natural scene statistics" modelled with an SVR | 0–100 | Lower = better. <30 excellent, 30–50 good, 50–65 fair, 65–80 poor |
 | `nima_aesthetic` | NIMA (aesthetic) | Inception-ResNet-V2 trained on the AVA dataset; predicts a distribution over 1–10 human ratings; returns the expected score | 1–10 | Higher = better. <5 below average, 7+ strong |
-| `clip_iqa+` | CLIP-IQA+ | CLIP vision-language model prompted with quality/distortion text pairs; cosine similarity to "good quality" direction | 0–1 | Higher = better. <0.4 poor, >0.6 good |
+| `clip_iqa` | CLIP-IQA+ | CLIP vision-language model prompted with quality/distortion text pairs; cosine similarity to "good quality" direction | 0–1 | Higher = better. <0.4 poor, >0.6 good |
 | `musiq` | MUSIQ | Multi-scale ViT that patches the image at several resolutions; trained on multiple IQA datasets | 0–100 | Higher = better. Direct perceptual quality score |
+| `niqe` | NIQE | No-reference metric based on natural scene statistics; detects compression artefacts and unnatural distortions | lower = better | <3 excellent, 3–5 good, 5–8 average, 8–12 poor, ≥12 terrible |
 
 ### 4.2 Classical CV Metrics
 
@@ -114,6 +122,8 @@ All pyiqa models are instantiated **once at module import** as module-level sing
 
 ## 5. Layer 2 — Composition Analysis (`src/analysis/composition.py`)
 
+Every sub-metric is guarded by `is_enabled()` before computation.
+
 ### 5.1 Saliency Map
 
 `_saliency_map(bgr_image) → float32 [0,1] H×W array`
@@ -121,6 +131,9 @@ All pyiqa models are instantiated **once at module import** as module-level sing
 - Calls **rembg** with U²-Net (`u2net`) to segment the salient foreground.
 - Extracts the alpha channel of the RGBA output as the saliency weight.
 - Falls back to a uniform map (all ones) on import failure or exception.
+- The resulting map is stored in `CompositionScores.saliency_map` (`exclude=True`) — available for visualisation within a request but not serialised in API responses.
+
+> **Known inefficiency**: `_detect_lines()` is called once for horizon tilt / scene classification and `_leading_lines()` runs its own separate Canny + HoughLinesP pass internally — two full edge-detection passes over the same image.
 
 ### 5.2 Centroid & Alignment
 
@@ -150,7 +163,7 @@ All pyiqa models are instantiated **once at module import** as module-level sing
 
 1. **Canny** edge detection on the grayscale image.
 2. **HoughLinesP** (`threshold=80`, `minLineLength=100px`) to find line segments.
-3. Angles binned into 15° clusters; cluster medians reported.
+3. Angles binned into 15° clusters; cluster medians reported (up to 12 clusters).
 
 | Field | Meaning |
 |-------|---------|
@@ -176,7 +189,7 @@ All pyiqa models are instantiated **once at module import** as module-level sing
 |-------|-----------------|
 | `portrait` | OpenCV Haar cascade face detection; face bounding box > 5% of image area |
 | `landscape` | No faces detected; top 20% of rows brighter than bottom 20% by ≥30 luminance; wide aspect ratio (width > height × 1.2) |
-| `architecture` | >50% of detected lines are vertical (angle 70°–110°) |
+| `architecture` | >8 vertical lines (angle 70°–110°) and ≥50% of detected angles are vertical |
 | `macro` | No face detected; focal length >90 mm (from EXIF) OR small image with highly uneven per-quadrant sharpness (max quadrant > 2× mean quadrant) |
 | `general` | Fallback when no other class matches |
 
@@ -210,24 +223,27 @@ All pyiqa models are instantiated **once at module import** as module-level sing
 
 ### 6.1 Quality Tier Computation
 
-Before calling the LLM, `_compute_quality_tier()` converts raw metrics to **ordinal scores** (0 = excellent … 4 = terrible):
+Before calling the LLM, `_compute_quality_tier()` converts raw metrics to **ordinal scores** (0 = excellent … 4 = terrible) and aggregates them into a weighted average. Weights are pulled from `get_weight()` in the config layer (Section 10), so disabling a metric automatically removes it from the tier calculation.
 
-| Metric | Ordinal thresholds |
-|--------|--------------------|
-| BRISQUE | <30→0, <50→1, <65→2, <80→3, else 4 |
-| Sharpness | Adjusted: `adj = sharpness − noise² × 20`; >500→0, ≥200→2, ≥80→3, else 4 |
-| Noise | <3→0, ≤8→2, ≤15→3, else 4 |
-| Exposure | Counts severe (hl>15%, sh>20%, mean<40 or >230) and moderate thresholds |
-| NIMA | <4→4, <5→3, <6→2, <7→1, else 0 |
-| CLIP-IQA+ | <0.3→4, <0.4→3, <0.5→2, <0.6→1, else 0 |
+| Metric | Ordinal thresholds | Config weight |
+|--------|--------------------|---------------|
+| BRISQUE | <30→0, <50→1, <65→2, <80→3, else 4; NaN→2 | 3.0 |
+| Sharpness | Noise-adjusted: `adj = sharpness − noise² × 20`; >500→0, ≥200→2, ≥80→3, else 4 | 2.0 |
+| Noise | <3→0, ≤8→2, ≤15→3, else 4; NaN→2 | 2.0 |
+| Exposure | Counts severe (hl>15%, sh>20%, mean<40 or >230) and moderate thresholds | 1.0 each |
+| NIMA | ≥7→0, ≥6→1, ≥5→2, ≥4→3, <4→4; None/NaN→None (excluded) | 2.0 |
+| CLIP-IQA+ | ≥0.60→0, ≥0.50→1, ≥0.40→2, ≥0.30→3, <0.30→4 | 1.0 |
+| MUSIQ | ≥70→0, ≥55→1, ≥40→2, ≥25→3, <25→4 | 1.5 |
+| NIQE | <3→0, <5→1, <8→2, <12→3, ≥12→4 | 1.0 |
+| Composition | `_composition_ord()`: penalty based on `visual_weight_balance` and `rot_alignment_score` | 2.0 |
 
-**Weighted average**: `(BRISQUE×3 + sharpness×2 + noise×2 + exposure×1 + NIMA×2 + CLIP×1) / 11`
+`_composition_ord()` converts the composition sub-scores into a single ordinal using visual weight balance (imbalanced > 3.0 → poor) and RoT alignment (>0.7 → poor).
 
-The resulting float maps to a quality tier string sent to the LLM for tone anchoring.
+The return value of `_compute_quality_tier()` is a plain `dict` that maps to the `QualityTier` Pydantic model (see Section 8), with individual tier strings for each enabled metric plus an `overall` tier.
 
 ### 6.2 Payload Construction
 
-`_build_payload()` serialises all scores into a JSON **user message**. Every numeric field is wrapped with both a `value` and a `scale` description string so the LLM receives human-readable interpretation bounds alongside each number.
+`_build_payload(tech, comp, exif, features)` serialises all scores into a JSON **user message**. Every numeric field is wrapped with both a `value` and a `scale` description string so the LLM receives human-readable interpretation bounds alongside each number. The payload also includes a `requested_features` list so the LLM knows which output sections to generate.
 
 Example snippet:
 ```json
@@ -235,9 +251,16 @@ Example snippet:
   "brisque": {
     "value": 28.4,
     "scale": "0–100, lower is better; <30 excellent, 30–50 good, 50–65 fair, >65 poor"
-  }
+  },
+  "niqe": {
+    "value": 4.1,
+    "scale": "lower is better; <3 excellent, 3–5 good, 5–8 average, >8 poor"
+  },
+  "requested_features": ["composition", "technical", "improvements"]
 }
 ```
+
+Metrics disabled in the config layer are omitted from the payload entirely.
 
 ### 6.3 LLM Call
 
@@ -247,17 +270,29 @@ Example snippet:
 | Auth | `OPENROUTER_API_KEY` environment variable |
 | Model | `LLM_MODEL` env var (default: `anthropic/claude-haiku-4-5-20251001`) |
 | System prompt | `prompts/system.md` — expert photography critic persona, quality-tier tone anchoring table, genre-aware guidance sections (portrait / landscape / architecture / macro) |
+| Max tokens | 4096 |
 | Sync call | `synthesise()` → returns complete `AnalysisReport` |
 | Streaming | `synthesise_stream()` → SSE generator yielding text chunks; guards `if not chunk.choices: continue` to handle OpenRouter keepalive empty-choices chunks |
+
+**SSE event sequence for `/analyse/stream`:**
+
+| Event type | Payload | When emitted |
+|------------|---------|--------------|
+| `metrics` | Full `{exif, quality_tier, technical, composition}` JSON | Immediately after L1+L2 complete |
+| `chunk` | Raw LLM text delta | Each streamed token |
+| `report` | Parsed `AnalysisReport` JSON | After LLM stream ends and JSON is sanitised |
+| `done` | `{}` | End of stream |
+| `error` | `{detail: string}` | On any exception |
 
 ### 6.4 JSON Sanitisation (`_sanitise_llm_json`)
 
 The LLM output is cleaned before `json.loads()`:
 
 1. Strip markdown code fences (` ```json … ``` `).
-2. Remove leading-plus signs from numbers (`+15` → `15`).
-3. Insert missing commas between adjacent JSON fields.
-4. Remove trailing commas before `}` or `]`.
+2. Extract from first `{` to last `}` (strips preamble / epilogue).
+3. Remove leading-plus signs from numbers (`+15` → `15`).
+4. Insert missing commas between adjacent JSON fields.
+5. Remove trailing commas before `}` or `]`.
 
 ---
 
@@ -266,11 +301,30 @@ The LLM output is cleaned before `json.loads()`:
 | Aspect | Detail |
 |--------|--------|
 | Framework | FastAPI |
-| CORS | All origins allowed (development default) |
-| Lifespan | `@asynccontextmanager` startup handler pre-warms pyiqa models and rembg on first request |
-| `POST /analyse` | Synchronous — returns complete `AnalyseResponse` JSON |
-| `POST /analyse/stream` | SSE streaming — emits `metrics` event (JSON with exif + technical + composition), then streams LLM tokens as `report_chunk` events, ends with `done` |
-| `_json_safe()` | Recursively replaces `nan` / `inf` in metric dicts before SSE emission (JSON spec does not allow these values) |
+| Max upload size | 20 MB |
+| Allowed content types | `image/jpeg`, `image/png` |
+| CORS | `http://localhost:3000` + comma-separated `ALLOWED_ORIGINS` env var |
+| Log level | `LOG_LEVEL` env var (default: `INFO`) |
+| Torch multiprocessing | `torch.multiprocessing.set_sharing_strategy("file_system")` at startup to avoid named-semaphore leaks on macOS |
+| Lifespan | `@asynccontextmanager` startup handler calls `log_active_pipeline()`, then pre-warms pyiqa + rembg models |
+
+### Endpoints
+
+| Method | Path | Form params | Response |
+|--------|------|-------------|----------|
+| `GET` | `/health` | — | `{"status": "ok", "models_loaded": bool}` |
+| `POST` | `/analyse` | `file` (UploadFile), `features` (str, default `"full"`) | `AnalyseResponse` JSON |
+| `POST` | `/analyse/stream` | same | SSE stream (see Section 6.3) |
+
+### Feature Flags (`_parse_features`)
+
+The `features` form field accepts a comma-separated list (e.g. `"composition,technical"`) or `"full"`. It is parsed by `_parse_features()` into an `AnalysisFeature` flag (a bitfield). The flag controls which sections the LLM generates and which fields appear in the `AnalysisReport`.
+
+`_FEATURE_MAP` in `api.py` maps string names to `AnalysisFeature` members: `composition`, `aesthetics`, `technical`, `improvements`, `editing`, `inspiration`, `full`.
+
+### Helpers
+
+- `_json_safe()` — Recursively replaces `nan`/`inf` in metric dicts before JSON serialisation (the JSON spec forbids these values).
 
 ---
 
@@ -278,23 +332,58 @@ The LLM output is cleaned before `json.loads()`:
 
 All models are **Pydantic** `BaseModel`.
 
-### `ExifData`
-Camera make, model, ISO, shutter speed, aperture (f-number), focal length, lens model, original image dimensions.
+### `AnalysisFeature` (Flag enum)
 
-### `TechnicalScores` (13 fields)
+Bitfield controlling which LLM output sections are requested:
+
+| Member | Value |
+|--------|-------|
+| `COMPOSITION` | 1 |
+| `AESTHETICS` | 2 |
+| `TECHNICAL` | 4 |
+| `IMPROVEMENTS` | 8 |
+| `EDITING` | 16 |
+| `INSPIRATION` | 32 |
+| `FULL` | all flags OR'd (63) |
+
+### `ExifData`
+Camera make, model, ISO, shutter speed, aperture (f-number), focal length, lens model, original image dimensions (`image_width`, `image_height`).
+
+### `TechnicalScores` (14 fields)
+
 | Group | Fields |
 |-------|--------|
-| Learned | `brisque`, `nima_aesthetic`, `clip_iqa_plus`, `musiq` |
+| Learned | `brisque`, `nima_aesthetic`, `clip_iqa`, `musiq`, `niqe` |
 | Sharpness | `sharpness_laplacian`, `sharpness_regional` |
 | Noise | `noise_sigma` |
 | Exposure | `exposure_clipped_highlights_pct`, `exposure_clipped_shadows_pct`, `histogram_mean`, `histogram_std` |
 | Tonal | `dynamic_range_stops`, `contrast_rms` |
 
-### `CompositionScores` (17 fields)
-Centroid, alignment scores + best_alignment, negative_space_ratio, visual_weight_quadrants, visual_weight_balance, symmetry_horizontal, symmetry_vertical, dominant_line_angles, leading_lines_converge_to_subject, line_pattern, horizon_tilt_degrees, scene_type, dominant_colors, color_harmony_type, color_harmony_score.
+### `CompositionScores`
+
+All centroid, alignment, negative-space, visual-weight, symmetry, leading-lines, horizon-tilt, scene-type, and color-harmony fields described in Section 5.
+
+`saliency_map: Any | None` — declared with `exclude=True`; never appears in serialised API responses but is available within the request lifecycle for visualisation.
 
 ### `AnalysisReport` (7 string fields)
-`summary`, `composition_feedback`, `technical_feedback`, `aesthetic_feedback`, `improvement_tips`, `photographer_recommendations`, `style_references`.
+
+| Field | Present when |
+|-------|-------------|
+| `summary` | Always |
+| `composition` | `AnalysisFeature.COMPOSITION` requested |
+| `aesthetics` | `AnalysisFeature.AESTHETICS` requested |
+| `technical` | `AnalysisFeature.TECHNICAL` requested |
+| `improvements` | `AnalysisFeature.IMPROVEMENTS` requested |
+| `editing` | `AnalysisFeature.EDITING` requested |
+| `inspiration` | `AnalysisFeature.INSPIRATION` requested |
+
+### `QualityTier`
+
+Pydantic `BaseModel` with `overall` (tier string) plus per-metric tier fields:
+
+`overall`, `brisque_tier`, `sharpness_tier`, `noise_tier`, `exposure_tier`, `composition_tier`, `nima_tier`, `clip_tier`, `musiq_tier`, `niqe_tier`
+
+Each per-metric tier is `str | None` — `None` if the metric is disabled in config.
 
 ### `AnalyseResponse`
 Top-level response: `exif` + `quality_tier` + `technical` + `composition` + `report`.
@@ -305,18 +394,62 @@ Top-level response: `exif` + `quality_tier` + `technical` + `composition` + `rep
 
 | Variable | Default | Purpose |
 |----------|---------|---------|
-| `ANTHROPIC_API_KEY` | — | (legacy; not used in current OpenRouter setup) |
 | `OPENROUTER_API_KEY` | required | OpenRouter API key for LLM calls |
 | `LLM_MODEL` | `anthropic/claude-haiku-4-5-20251001` | Model identifier passed to OpenRouter |
+| `LOG_LEVEL` | `INFO` | Python logging level for the API server |
+| `ALLOWED_ORIGINS` | _(none)_ | Comma-separated extra CORS origins (in addition to `localhost:3000`) |
 
 All variables are loaded from `.env` via `python-dotenv`. Never hard-code keys.
 
 ---
 
-## 10. Key Conventions
+## 10. Metrics Configuration (`src/config/metrics.py`)
+
+The config layer is the single source of truth for which metrics are active and how much they contribute to the quality tier.
+
+### `MetricConfig` (TypedDict)
+
+```python
+class MetricConfig(TypedDict):
+    enabled: bool
+    weight: float   # 0 = informational (not used in quality tier)
+```
+
+### `METRICS` dict
+
+Hard-coded dict of 28 metrics (`str → MetricConfig`). Covers all Layer-1 and Layer-2 metrics. Selected defaults:
+
+| Metric | Enabled | Weight | Notes |
+|--------|---------|--------|-------|
+| `brisque` | `True` | 3.0 | |
+| `nima_aesthetic` | `True` | 2.0 | |
+| `clip_iqa` | `True` | 1.0 | |
+| `musiq` | `True` | 1.5 | |
+| `niqe` | `True` | 1.0 | |
+| `sharpness_laplacian` | `True` | 2.0 | |
+| `sharpness_regional` | `True` | 0.0 | informational only |
+| `noise_sigma` | `True` | 2.0 | |
+| `rot_alignment_score` | `True` | 2.0 | drives `_composition_ord()` |
+| _(all others)_ | `True` | 0.0 | informational only |
+
+### Public API
+
+| Function | Signature | Behaviour |
+|----------|-----------|-----------|
+| `is_enabled` | `(metric: str) → bool` | Returns `False` for unknown metrics |
+| `get_weight` | `(metric: str) → float` | Returns `0.0` for unknown metrics |
+| `log_active_pipeline` | `() → None` | Logs formatted summary of active metrics at startup |
+
+`log_active_pipeline()` is called during the FastAPI lifespan startup hook.
+
+---
+
+## 11. Key Conventions
 
 - `uploads/` is gitignored — never commit user images.
 - Model weights (pyiqa, rembg U²-Net) are downloaded at runtime — never commit weight files.
 - `prompts/system.md` is read at synthesizer module import time — keep it on disk.
 - pyiqa models are initialised once at module import; each metric call is wrapped in `try/except` and returns `NaN`/`None` on failure.
 - rembg uses a lazy import inside `_saliency_map()` and falls back to a uniform map on failure.
+- `saliency_map` is excluded from all serialised output (`exclude=True` on the Pydantic field).
+- Torch multiprocessing sharing strategy is set to `"file_system"` at startup to prevent named-semaphore leaks on macOS.
