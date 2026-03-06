@@ -32,6 +32,7 @@ _brisque = _load("brisque")
 _nima = _load("nima")
 _clip_iqa = _load("clipiqa+")
 _musiq = _load("musiq")
+_niqe = _load("niqe")
 
 
 # ---------------------------------------------------------------------------
@@ -55,6 +56,7 @@ def analyse(bgr_array: np.ndarray, tensor: torch.Tensor) -> TechnicalScores:
         nima_aesthetic=_score_nima(tensor),
         clip_iqa=_score_clip_iqa(tensor),
         musiq=_score_musiq(tensor),
+        niqe=_score_niqe(tensor),
         sharpness_laplacian=_sharpness_global(gray),
         sharpness_regional=_sharpness_regional(gray),
         noise_sigma=_noise(bgr_array),
@@ -120,6 +122,20 @@ def _score_musiq(tensor: torch.Tensor) -> float | None:
         return val
     except Exception as exc:
         logger.warning("musiq failed: %s", exc)
+        return None
+
+
+def _score_niqe(tensor: torch.Tensor) -> float | None:
+    if _niqe is None:
+        return None
+    try:
+        import time
+        t = time.perf_counter()
+        val = float(_niqe(tensor).item())
+        logger.debug("niqe complete  %.2fs  val=%.1f", time.perf_counter() - t, val)
+        return val
+    except Exception as exc:
+        logger.warning("niqe failed: %s", exc)
         return None
 
 

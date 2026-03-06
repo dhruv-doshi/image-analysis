@@ -48,10 +48,26 @@ from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import StreamingResponse
 
+# Switch torch IPC to file-descriptor mode before any model is initialised.
+# This prevents PyTorch from registering POSIX named semaphores via the
+# multiprocessing module, which Python's resource_tracker would otherwise flag
+# as leaked objects at process shutdown (benign but noisy on macOS).
+try:
+    import torch
+    torch.multiprocessing.set_sharing_strategy("file_system")
+except Exception:
+    pass
+
 from src.analysis.composition import analyse as analyse_composition
 from src.analysis.technical import analyse as analyse_technical
 from src.llm.client import synthesise_stream
-from src.llm.synthesizer import _compute_quality_tier, synthesise
+from src.llm.synthesizer import (
+    _compute_quality_tier,
+    _coerce_report_fields,
+    _sanitise_llm_json,
+    synthesise,
+)
+from src.models import AnalysisReport
 from src.models import AnalysisFeature
 from src.utils.loader import extract_exif, load_image
 
@@ -161,7 +177,7 @@ async def analyse(
                 comp.scene_type,
             )
 
-            quality_tier = _compute_quality_tier(tech)
+            quality_tier = _compute_quality_tier(tech, comp)
             llm_model = os.getenv("LLM_MODEL", "unknown")
             logger.info("L3 LLM call starting  model=%s", llm_model)
             t3 = time.perf_counter()
@@ -234,7 +250,7 @@ async def analyse_stream(
                 comp.scene_type,
             )
 
-            quality_tier = _compute_quality_tier(tech)
+            quality_tier = _compute_quality_tier(tech, comp)
         finally:
             tmp_path.unlink(missing_ok=True)
     except HTTPException:
@@ -258,12 +274,29 @@ async def analyse_stream(
         yield f"data: {metrics_event}\n\n"
         logger.info("SSE stream started — metrics event sent")
         chunk_count = 0
+        raw_chunks: list[str] = []
+        stream_error: str | None = None
         try:
             for chunk in synthesise_stream(tech, comp, exif, feature_flag):
                 yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
+                raw_chunks.append(chunk)
                 chunk_count += 1
         except Exception as exc:
-            yield f"data: {json.dumps({'type': 'error', 'message': str(exc)})}\n\n"
+            stream_error = str(exc)
+            yield f"data: {json.dumps({'type': 'error', 'message': stream_error})}\n\n"
+
+        if stream_error is None:
+            # Parse the full LLM response on the backend — avoids all frontend regex hacks
+            try:
+                raw_text = "".join(raw_chunks)
+                sanitised = _sanitise_llm_json(raw_text)
+                data = json.loads(sanitised)
+                report = AnalysisReport(**_coerce_report_fields(data))
+                yield f"data: {json.dumps(_json_safe({'type': 'report', 'report': report.model_dump()}))}\n\n"
+            except Exception as exc:
+                logger.error("SSE report parse failed: %s", exc)
+                yield f"data: {json.dumps({'type': 'error', 'message': f'Report parse failed: {exc}'})}\n\n"
+
         yield 'data: {"type":"done"}\n\n'
         logger.info(
             "SSE stream complete  chunks=%d  elapsed=%.2fs",

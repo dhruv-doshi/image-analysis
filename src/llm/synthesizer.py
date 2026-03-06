@@ -35,6 +35,11 @@ def _sanitise_llm_json(raw: str) -> str:
     if raw.startswith("```"):
         raw = raw.split("\n", 1)[-1]           # drop opening fence line
         raw = raw.rsplit("```", 1)[0].strip()  # drop closing fence
+    # Extract the JSON object — handles any preamble/epilogue text the LLM emits
+    start = raw.find("{")
+    end = raw.rfind("}")
+    if start != -1 and end > start:
+        raw = raw[start:end + 1]
     # JSON spec forbids +N numbers
     raw = re.sub(r":\s*\+(\d)", r": \1", raw)
     # Missing comma after ] or } before the next "key": pattern
@@ -155,7 +160,49 @@ def _clip_ord(v: float | None) -> int | None:
     return 4
 
 
-def _compute_quality_tier(tech: TechnicalScores) -> dict:
+def _musiq_ord(v: float | None) -> int | None:
+    if v is None or math.isnan(v):
+        return None
+    if v >= 70:
+        return 0
+    if v >= 55:
+        return 1
+    if v >= 40:
+        return 2
+    if v >= 25:
+        return 3
+    return 4
+
+
+def _niqe_ord(v: float | None) -> int | None:
+    if v is None or math.isnan(v):
+        return None
+    if v < 3:
+        return 0
+    if v < 5:
+        return 1
+    if v < 8:
+        return 2
+    if v < 12:
+        return 3
+    return 4
+
+
+def _composition_ord(comp: CompositionScores) -> int:
+    """0=excellent … 4=terrible based on balance + subject placement."""
+    balance = comp.visual_weight_balance  # 1.0=balanced, >3=concentrated
+    rot = comp.rot_alignment_score       # 0=perfect, >0.5=off power points
+    penalty = 0
+    if balance > 6.0:
+        penalty += 2
+    elif balance > 4.0:
+        penalty += 1
+    if rot > 0.6:
+        penalty += 1
+    return min(4, penalty)
+
+
+def _compute_quality_tier(tech: TechnicalScores, comp: CompositionScores) -> dict:
     b = _brisque_ord(tech.brisque)
     s = _sharpness_ord(tech.sharpness_laplacian, tech.noise_sigma)
     n = _noise_ord(tech.noise_sigma)
@@ -166,6 +213,9 @@ def _compute_quality_tier(tech: TechnicalScores) -> dict:
     )
     na = _nima_ord(tech.nima_aesthetic)
     ci = _clip_ord(tech.clip_iqa)
+    mq = _musiq_ord(tech.musiq)
+    nq = _niqe_ord(tech.niqe)
+    co = _composition_ord(comp)
 
     # Base weights: BRISQUE 3x, sharpness 2x, noise 2x, exposure 1x = 8
     weighted, weight_sum = b * 3 + s * 2 + n * 2 + e, 8
@@ -175,6 +225,15 @@ def _compute_quality_tier(tech: TechnicalScores) -> dict:
     if ci is not None:
         weighted += ci * 1
         weight_sum += 1
+    if mq is not None:
+        weighted += mq * 1.5
+        weight_sum += 1.5
+    if nq is not None:
+        weighted += nq * 1
+        weight_sum += 1
+    # Composition: weight 2x
+    weighted += co * 2
+    weight_sum += 2
     overall = int(weighted / weight_sum + 0.5)
 
     result = {
@@ -183,11 +242,16 @@ def _compute_quality_tier(tech: TechnicalScores) -> dict:
         "sharpness_tier": _t(s),
         "noise_tier": _t(n),
         "exposure_tier": _t(e),
+        "composition_tier": _t(co),
     }
     if na is not None:
         result["nima_tier"] = _t(na)
     if ci is not None:
         result["clip_tier"] = _t(ci)
+    if mq is not None:
+        result["musiq_tier"] = _t(mq)
+    if nq is not None:
+        result["niqe_tier"] = _t(nq)
     return result
 
 
@@ -202,7 +266,7 @@ def _build_payload(
 
     payload = {
         "exif": exif.model_dump(exclude_none=True),
-        "quality_tier": _compute_quality_tier(tech),
+        "quality_tier": _compute_quality_tier(tech, comp),
         "technical": {
             "brisque": {
                 "value": tech.brisque,
@@ -219,6 +283,10 @@ def _build_payload(
             "musiq": {
                 "value": tech.musiq,
                 "scale": "0–100, higher is better (contrast: BRISQUE is lower-is-better)",
+            },
+            "niqe": {
+                "value": tech.niqe,
+                "scale": "lower is better; <3=excellent, 3–5=good, 5–8=average, >8=poor (detects compression/distortion artefacts)",
             },
             "sharpness_laplacian": {
                 "value": tech.sharpness_laplacian,

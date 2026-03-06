@@ -141,7 +141,7 @@ def process_image(
     new_payload = _build_payload(tech, comp, exif, AnalysisFeature.FULL)
     old_payload = _strip_old_payload(new_payload)
 
-    quality_new = _compute_quality_tier(tech)
+    quality_new = _compute_quality_tier(tech, comp)
     quality_old = {k: v for k, v in quality_new.items() if k not in _NEW_TIER_FIELDS}
 
     comp_dump = {k: v for k, v in comp.model_dump().items() if k != "saliency_map"}

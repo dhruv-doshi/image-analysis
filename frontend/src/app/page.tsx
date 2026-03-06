@@ -2,7 +2,7 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { analyseImageStream, checkHealth } from '@/lib/api'
-import type { AnalyseResponse, AnalysisReport } from '@/types/api'
+import type { AnalyseResponse } from '@/types/api'
 import type { MetricsPayload } from '@/lib/api'
 import AnalysisResult from '@/components/AnalysisResult'
 
@@ -78,38 +78,14 @@ export default function Home() {
         (chunk) => {
           reportBufferRef.current += chunk
         },
+        (report) => {
+          // Backend has already parsed and sanitised the JSON — use it directly
+          const m = partialMetricsRef.current
+          if (m) setResult({ ...m, report })
+          setStreamingReport(false)
+        },
         () => {
           setStreamingReport(false)
-          try {
-            let buf = reportBufferRef.current.trim()
-            // Strip code fences: ```json...``` or ```...``` (tolerates trailing whitespace / CRLF)
-            buf = buf.replace(/^```(?:json|JSON)?\s*\r?\n?/, '').replace(/\r?\n?```[\s\S]*$/, '').trim()
-            // JSON forbids leading-plus numbers (+15 → 15)
-            buf = buf.replace(/:\s*\+(\d)/g, ': $1')
-            // Missing comma after ] or } before next "key" field
-            buf = buf.replace(/([}\]])\s*\n(\s*"[a-z_]+")/g, '$1,\n$2')
-            // Trailing commas before closing brace/bracket
-            buf = buf.replace(/,\s*([}\]])/g, '$1')
-            // eslint-disable-next-line @typescript-eslint/no-explicit-any
-            let parsed: any
-            try {
-              parsed = JSON.parse(buf)
-            } catch (e) {
-              console.error('JSON parse failed:', e, '\nBuffer:', buf.slice(0, 500))
-              throw e
-            }
-            // LLM sometimes returns arrays or objects for string fields — coerce to string
-            const reportKeys = ['summary', 'composition', 'aesthetics', 'technical', 'improvements', 'editing', 'inspiration'] as const
-            for (const key of reportKeys) {
-              if (Array.isArray(parsed[key])) parsed[key] = parsed[key].join('\n')
-              else if (parsed[key] !== null && typeof parsed[key] === 'object') parsed[key] = Object.entries(parsed[key]).map(([k, v]) => `${k}: ${v}`).join('\n')
-            }
-            const report = parsed as AnalysisReport
-            const m = partialMetricsRef.current
-            if (m) setResult({ ...m, report })
-          } catch {
-            setError('Failed to parse analysis report')
-          }
         },
       )
     } catch (err) {

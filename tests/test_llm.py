@@ -112,6 +112,32 @@ def full_exif() -> ExifData:
 
 
 # ---------------------------------------------------------------------------
+# Module-level helpers
+# ---------------------------------------------------------------------------
+
+def _make_comp(balance: float, rot: float) -> CompositionScores:
+    """Build a minimal CompositionScores with specific balance and RoT values."""
+    return CompositionScores(
+        saliency_centroid_x=0.33,
+        saliency_centroid_y=0.33,
+        rot_alignment_score=rot,
+        golden_ratio_alignment_score=rot + 0.1,
+        best_alignment="rule_of_thirds",
+        negative_space_ratio=0.5,
+        visual_weight_quadrants={
+            "top_left": 0.25, "top_right": 0.25,
+            "bottom_left": 0.25, "bottom_right": 0.25,
+        },
+        visual_weight_balance=balance,
+        symmetry_horizontal=0.5,
+        symmetry_vertical=0.5,
+        dominant_line_angles=[],
+        leading_lines_converge_to_subject=False,
+        line_pattern="none",
+    )
+
+
+# ---------------------------------------------------------------------------
 # Tests
 # ---------------------------------------------------------------------------
 
@@ -236,6 +262,18 @@ class TestPayloadContent:
                         f"{section}.{key}.scale must be a string"
                     )
 
+    def test_niqe_key_present_in_payload(self, minimal_tech, minimal_comp, empty_exif):
+        payload = self._capture_payload(minimal_tech, minimal_comp, empty_exif)
+        assert "niqe" in payload["technical"]
+
+    def test_niqe_scale_is_string(self, minimal_tech, minimal_comp, empty_exif):
+        payload = self._capture_payload(minimal_tech, minimal_comp, empty_exif)
+        assert isinstance(payload["technical"]["niqe"]["scale"], str)
+
+    def test_quality_tier_has_composition_tier(self, minimal_tech, minimal_comp, empty_exif):
+        payload = self._capture_payload(minimal_tech, minimal_comp, empty_exif)
+        assert "composition_tier" in payload["quality_tier"]
+
 
 class TestErrorHandling:
     """Malformed JSON from the LLM is re-raised as JSONDecodeError."""
@@ -256,6 +294,141 @@ class TestErrorHandling:
             mc.chat.completions.create.return_value = bad_resp
             with pytest.raises(json.JSONDecodeError):
                 syn.synthesise(minimal_tech, minimal_comp, empty_exif)
+
+
+class TestMusiqOrd:
+    """_musiq_ord() maps MUSIQ scores (0–100, higher=better) to 0–4 ordinals."""
+
+    @pytest.mark.parametrize("val,expected", [
+        (80.0, 0),  # >= 70 → excellent
+        (60.0, 1),  # >= 55 → good
+        (45.0, 2),  # >= 40 → average
+        (30.0, 3),  # >= 25 → poor
+        (10.0, 4),  # < 25  → terrible
+    ])
+    def test_ordinal_boundaries(self, val, expected):
+        from src.llm.synthesizer import _musiq_ord
+        assert _musiq_ord(val) == expected
+
+    def test_none_returns_none(self):
+        from src.llm.synthesizer import _musiq_ord
+        assert _musiq_ord(None) is None
+
+    def test_nan_returns_none(self):
+        from src.llm.synthesizer import _musiq_ord
+        assert _musiq_ord(float("nan")) is None
+
+
+class TestNiqeOrd:
+    """_niqe_ord() maps NIQE scores (lower=better) to 0–4 ordinals."""
+
+    @pytest.mark.parametrize("val,expected", [
+        (2.0,  0),  # < 3   → excellent
+        (4.0,  1),  # < 5   → good
+        (6.0,  2),  # < 8   → average
+        (10.0, 3),  # < 12  → poor
+        (15.0, 4),  # >= 12 → terrible
+    ])
+    def test_ordinal_boundaries(self, val, expected):
+        from src.llm.synthesizer import _niqe_ord
+        assert _niqe_ord(val) == expected
+
+    def test_none_returns_none(self):
+        from src.llm.synthesizer import _niqe_ord
+        assert _niqe_ord(None) is None
+
+    def test_nan_returns_none(self):
+        from src.llm.synthesizer import _niqe_ord
+        assert _niqe_ord(float("nan")) is None
+
+
+class TestCompositionOrd:
+    """_composition_ord() blends visual_weight_balance + rot_alignment_score into 0–4."""
+
+    def test_balanced_good_rot_returns_zero(self):
+        from src.llm.synthesizer import _composition_ord
+        assert _composition_ord(_make_comp(balance=1.5, rot=0.1)) == 0
+
+    def test_moderate_imbalance_adds_one_penalty(self):
+        from src.llm.synthesizer import _composition_ord
+        # balance > 4 → +1, rot fine → total 1
+        assert _composition_ord(_make_comp(balance=5.0, rot=0.1)) == 1
+
+    def test_heavy_imbalance_adds_two_penalties(self):
+        from src.llm.synthesizer import _composition_ord
+        # balance > 6 → +2, rot fine → total 2
+        assert _composition_ord(_make_comp(balance=7.0, rot=0.1)) == 2
+
+    def test_bad_rot_adds_one_penalty(self):
+        from src.llm.synthesizer import _composition_ord
+        # balance fine, rot > 0.6 → +1
+        assert _composition_ord(_make_comp(balance=1.5, rot=0.8)) == 1
+
+    def test_heavy_imbalance_and_bad_rot_sums_penalties(self):
+        from src.llm.synthesizer import _composition_ord
+        # balance > 6 → +2, rot > 0.6 → +1 → total 3
+        assert _composition_ord(_make_comp(balance=8.0, rot=0.9)) == 3
+
+    def test_result_never_exceeds_four(self):
+        from src.llm.synthesizer import _composition_ord
+        # Worst possible inputs — penalty capped at 4
+        assert _composition_ord(_make_comp(balance=99.0, rot=0.99)) <= 4
+
+
+class TestQualityTierNewMetrics:
+    """_compute_quality_tier() integration tests for MUSIQ, NIQE, composition."""
+
+    def test_composition_tier_always_present(self, minimal_tech, minimal_comp):
+        from src.llm.synthesizer import _compute_quality_tier
+        result = _compute_quality_tier(minimal_tech, minimal_comp)
+        assert "composition_tier" in result
+
+    def test_composition_tier_is_valid_label(self, minimal_tech, minimal_comp):
+        from src.llm.synthesizer import _compute_quality_tier
+        result = _compute_quality_tier(minimal_tech, minimal_comp)
+        assert result["composition_tier"] in ("excellent", "good", "average", "poor", "terrible")
+
+    def test_bad_composition_reflected_in_composition_tier(self, minimal_tech):
+        from src.llm.synthesizer import _compute_quality_tier
+        bad_comp = _make_comp(balance=8.0, rot=0.9)
+        result = _compute_quality_tier(minimal_tech, bad_comp)
+        # penalty = 3 → "poor"
+        assert result["composition_tier"] == "poor"
+
+    def test_musiq_tier_included_when_provided(self, minimal_tech, minimal_comp):
+        from src.llm.synthesizer import _compute_quality_tier
+        tech = minimal_tech.model_copy(update={"musiq": 75.0})
+        result = _compute_quality_tier(tech, minimal_comp)
+        assert "musiq_tier" in result
+        assert result["musiq_tier"] == "excellent"  # 75 >= 70
+
+    def test_musiq_tier_absent_when_none(self, minimal_tech, minimal_comp):
+        from src.llm.synthesizer import _compute_quality_tier
+        tech = minimal_tech.model_copy(update={"musiq": None})
+        result = _compute_quality_tier(tech, minimal_comp)
+        assert "musiq_tier" not in result
+
+    def test_niqe_tier_included_when_provided(self, minimal_tech, minimal_comp):
+        from src.llm.synthesizer import _compute_quality_tier
+        tech = minimal_tech.model_copy(update={"niqe": 4.0})
+        result = _compute_quality_tier(tech, minimal_comp)
+        assert "niqe_tier" in result
+        assert result["niqe_tier"] == "good"  # 3.0 ≤ 4.0 < 5.0
+
+    def test_niqe_tier_absent_when_none(self, minimal_tech, minimal_comp):
+        from src.llm.synthesizer import _compute_quality_tier
+        tech = minimal_tech.model_copy(update={"niqe": None})
+        result = _compute_quality_tier(tech, minimal_comp)
+        assert "niqe_tier" not in result
+
+    def test_overall_tier_worsens_with_bad_composition(self, minimal_tech):
+        from src.llm.synthesizer import _compute_quality_tier
+        good_comp = _make_comp(balance=1.5, rot=0.1)
+        bad_comp  = _make_comp(balance=8.0, rot=0.9)
+        good_result = _compute_quality_tier(minimal_tech, good_comp)
+        bad_result  = _compute_quality_tier(minimal_tech, bad_comp)
+        _labels = ["excellent", "good", "average", "poor", "terrible"]
+        assert _labels.index(bad_result["overall"]) >= _labels.index(good_result["overall"])
 
 
 @pytest.mark.parametrize("features", [

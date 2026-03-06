@@ -32,6 +32,7 @@ export async function analyseImageStream(
   features = 'full',
   onMetrics: (data: MetricsPayload) => void,
   onChunk: (text: string) => void,
+  onReport: (report: import('@/types/api').AnalysisReport) => void,
   onDone: () => void,
 ): Promise<void> {
   const form = new FormData()
@@ -60,21 +61,26 @@ export async function analyseImageStream(
     buffer = parts.pop() ?? ''
     for (const part of parts) {
       if (!part.startsWith('data: ')) continue
+      // Parse the SSE frame — skip silently if malformed (e.g. keepalive pings)
+      let event: AnalyseStreamEvent
       try {
-        const event = JSON.parse(part.slice(6)) as AnalyseStreamEvent
-        if (event.type === 'metrics') {
-          const { type: _t, ...metrics } = event
-          onMetrics(metrics as MetricsPayload)
-        } else if (event.type === 'chunk') {
-          onChunk(event.text)
-        } else if (event.type === 'done') {
-          onDone()
-        } else if (event.type === 'error') {
-          throw new Error(event.message)
-        }
+        event = JSON.parse(part.slice(6)) as AnalyseStreamEvent
       } catch (e) {
-        if (e instanceof SyntaxError) continue  // malformed SSE data — skip
+        if (e instanceof SyntaxError) continue
         throw e
+      }
+      // Process event outside the frame-parse catch so callback errors propagate
+      if (event.type === 'metrics') {
+        const { type: _t, ...metrics } = event
+        onMetrics(metrics as MetricsPayload)
+      } else if (event.type === 'chunk') {
+        onChunk(event.text)
+      } else if (event.type === 'report') {
+        onReport(event.report)
+      } else if (event.type === 'done') {
+        onDone()
+      } else if (event.type === 'error') {
+        throw new Error(event.message)
       }
     }
   }

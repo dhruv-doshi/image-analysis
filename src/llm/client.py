@@ -58,4 +58,9 @@ def synthesise_stream(tech, comp, exif, features) -> Generator[str, None, None]:
             if delta:
                 yield delta
 
+    if finish_reason == "length":
+        logger.warning(
+            "LLM stream truncated: finish_reason=length — JSON response may be incomplete. "
+            "Consider raising max_tokens or shortening the input payload."
+        )
     logger.info("LLM stream done  finish_reason=%s", finish_reason)

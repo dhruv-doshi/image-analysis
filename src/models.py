@@ -34,6 +34,7 @@ class TechnicalScores(BaseModel):
     nima_aesthetic: float | None = None  # 1-10, higher = better
     clip_iqa: float | None = None  # 0-1, higher = better
     musiq: float | None = None  # 0-100, higher = better
+    niqe: float | None = None  # lower = better; <3=excellent, 3-5=good, >8=poor
     # Classical CV
     sharpness_laplacian: float  # variance of Laplacian; higher = sharper
     sharpness_regional: dict  # per-quadrant {top_left, top_right, bottom_left, bottom_right}
@@ -88,6 +89,7 @@ class QualityTier(BaseModel):
     sharpness_tier: str
     noise_tier: str
     exposure_tier: str
+    composition_tier: str | None = None
 
 
 class AnalyseResponse(BaseModel):

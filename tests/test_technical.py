@@ -351,6 +351,29 @@ class TestMusiq:
         assert isinstance(result, TechnicalScores)
 
 
+# ===========================================================================
+# TestNiqe
+# ===========================================================================
+
+class TestNiqe:
+
+    def test_niqe_returns_float_or_none(self, solid_grey_bgr, solid_grey_tensor):
+        result = analyse(solid_grey_bgr, solid_grey_tensor)
+        assert result.niqe is None or isinstance(result.niqe, float), (
+            f"niqe must be float or None, got {type(result.niqe)}"
+        )
+
+    def test_niqe_stubbed_value_matches_fixture(self, solid_grey_bgr, solid_grey_tensor):
+        """The conftest stub returns 4.5 for niqe — verify it flows through."""
+        result = analyse(solid_grey_bgr, solid_grey_tensor)
+        if result.niqe is not None:
+            assert result.niqe == pytest.approx(4.5, abs=0.01)
+
+    def test_niqe_present_in_technical_scores_model(self, solid_grey_bgr, solid_grey_tensor):
+        result = analyse(solid_grey_bgr, solid_grey_tensor)
+        assert hasattr(result, "niqe")
+
+
 @pytest.mark.parametrize(
     "image_arrays",
     [

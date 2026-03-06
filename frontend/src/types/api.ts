@@ -16,6 +16,7 @@ export interface QualityTier {
   sharpness_tier: 'excellent' | 'good' | 'average' | 'poor' | 'terrible'
   noise_tier: 'excellent' | 'good' | 'average' | 'poor' | 'terrible'
   exposure_tier: 'excellent' | 'good' | 'average' | 'poor' | 'terrible'
+  composition_tier?: 'excellent' | 'good' | 'average' | 'poor' | 'terrible'
 }
 
 export interface TechnicalScores {
@@ -23,6 +24,7 @@ export interface TechnicalScores {
   nima_aesthetic?: number
   clip_iqa?: number
   musiq?: number | null
+  niqe?: number | null
   sharpness_laplacian: number
   sharpness_regional: { top_left: number; top_right: number; bottom_left: number; bottom_right: number }
   noise_sigma: number
@@ -57,6 +59,7 @@ export interface CompositionScores {
 export type AnalyseStreamEvent =
   | { type: 'metrics'; exif: ExifData; quality_tier: QualityTier; technical: TechnicalScores; composition: CompositionScores }
   | { type: 'chunk'; text: string }
+  | { type: 'report'; report: AnalysisReport }
   | { type: 'error'; message: string }
   | { type: 'done' }
 

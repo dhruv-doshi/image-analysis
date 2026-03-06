@@ -20,6 +20,7 @@ const METRIC_INFO: Record<string, { label: string; description: string }> = {
   nima:           { label: 'Aesthetic appeal',          description: 'AI estimate of how visually pleasing the image is (0–10).' },
   clip_iqa:       { label: 'Perceptual quality',        description: 'How natural and high-quality the image looks to an AI visual model (0–1).' },
   musiq:          { label: 'Overall image quality',     description: 'Holistic quality score trained on human ratings (0–100).' },
+  niqe:           { label: 'Distortion / artefacts',    description: 'Detects compression artefacts and distortions — lower is better.' },
   // Composition
   best_alignment: { label: 'Subject placement',         description: 'How well the main subject aligns to classic compositional grids.' },
   negative_space: { label: 'Breathing room',            description: 'How much empty space surrounds the subject.' },
@@ -152,9 +153,15 @@ export default function AnalysisResult({ result, imageUrl }: { result: AnalyseRe
 
       {/* Header: quality tier + summary */}
       <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap">
           <TierBadge tier={quality_tier.overall} />
           <span className="text-xs text-zinc-500">Overall quality</span>
+          {quality_tier.composition_tier && (
+            <>
+              <TierBadge tier={quality_tier.composition_tier} />
+              <span className="text-xs text-zinc-500">Composition</span>
+            </>
+          )}
         </div>
         <p className="text-sm text-zinc-300 leading-relaxed">{report.summary}</p>
       </div>
@@ -315,6 +322,12 @@ export default function AnalysisResult({ result, imageUrl }: { result: AnalyseRe
               <MetricCard
                 label={<MetricLabel id="musiq" />}
                 value={technical.musiq.toFixed(1)}
+              />
+            )}
+            {technical.niqe != null && (
+              <MetricCard
+                label={<MetricLabel id="niqe" />}
+                value={technical.niqe.toFixed(2)}
               />
             )}
           </div>
