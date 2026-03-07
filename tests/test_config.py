@@ -6,7 +6,9 @@ from src.models import TechnicalScores, CompositionScores
 
 
 def test_all_metrics_enabled_by_default():
-    assert all(cfg["enabled"] for cfg in METRICS.values())
+    # use_heavy_saliency is intentionally disabled by default (fast spectral residual is used instead)
+    _OPT_OUT_BY_DEFAULT = {"use_heavy_saliency"}
+    assert all(cfg["enabled"] for k, cfg in METRICS.items() if k not in _OPT_OUT_BY_DEFAULT)
 
 
 def test_disable_brisque_skips_computation(monkeypatch):

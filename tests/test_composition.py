@@ -395,6 +395,44 @@ class TestColorHarmony:
         assert len(colors) == 5, f"Expected 5 dominant colors, got {len(colors)}"
 
 
+class TestSaliencyMethod:
+    """_saliency_map() supports two paths: spectral residual (default) and rembg."""
+
+    def test_spectral_residual_default(self, solid_grey_image):
+        """With use_heavy_saliency disabled, spectral residual returns float32 in [0,1]."""
+        import src.analysis.composition as comp_mod
+        import src.config.metrics as metrics_mod
+
+        original = metrics_mod.METRICS.get("use_heavy_saliency", {}).get("enabled", False)
+        metrics_mod.METRICS.setdefault("use_heavy_saliency", {})["enabled"] = False
+        try:
+            sal = comp_mod._saliency_map(solid_grey_image)
+            assert sal.dtype == np.float32
+            assert 0.0 <= float(sal.min()) and float(sal.max()) <= 1.0
+            assert sal.shape == (solid_grey_image.height, solid_grey_image.width)
+        finally:
+            metrics_mod.METRICS.setdefault("use_heavy_saliency", {})["enabled"] = original
+
+    def test_heavy_path_uses_rembg(self, solid_grey_image):
+        """With use_heavy_saliency enabled, rembg is called (already mocked)."""
+        import src.analysis.composition as comp_mod
+        import src.config.metrics as metrics_mod
+
+        # Set up rembg mock to return a valid RGBA image
+        h, w = solid_grey_image.height, solid_grey_image.width
+        rgba = np.ones((h, w, 4), dtype=np.uint8) * 255
+        sys.modules["rembg"].remove.return_value = Image.fromarray(rgba, "RGBA")
+
+        original = metrics_mod.METRICS.get("use_heavy_saliency", {}).get("enabled", False)
+        metrics_mod.METRICS.setdefault("use_heavy_saliency", {})["enabled"] = True
+        try:
+            sal = comp_mod._saliency_map(solid_grey_image)
+            assert sal.dtype == np.float32
+            assert sal.shape[:2] == (h, w)
+        finally:
+            metrics_mod.METRICS.setdefault("use_heavy_saliency", {})["enabled"] = original
+
+
 @pytest.mark.parametrize(
     "mask_fixture,bgr_fixture",
     [

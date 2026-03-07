@@ -29,6 +29,7 @@ METRICS: dict[str, MetricConfig] = {
     "dynamic_range_stops": {"enabled": True, "weight": 0.0},
     "contrast_rms": {"enabled": True, "weight": 0.0},
     # Composition
+    "use_heavy_saliency": {"enabled": False, "weight": 0.0},  # True = rembg U²-Net, False = OpenCV spectral residual
     "saliency_centroid_x": {"enabled": True, "weight": 0.0},
     "saliency_centroid_y": {"enabled": True, "weight": 0.0},
     "rot_alignment_score": {"enabled": True, "weight": 2.0},

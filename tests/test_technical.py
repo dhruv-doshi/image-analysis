@@ -27,7 +27,7 @@ import numpy as np
 import pytest
 import torch
 
-from src.analysis.technical import analyse
+from src.analysis.technical import _is_photograph, analyse
 from src.models import TechnicalScores
 
 from tests.conftest import pil_to_bgr, pil_to_tensor
@@ -372,6 +372,60 @@ class TestNiqe:
     def test_niqe_present_in_technical_scores_model(self, solid_grey_bgr, solid_grey_tensor):
         result = analyse(solid_grey_bgr, solid_grey_tensor)
         assert hasattr(result, "niqe")
+
+
+# ===========================================================================
+# TestParallelL1
+# ===========================================================================
+
+
+class TestParallelL1:
+    """Parallel ThreadPoolExecutor execution of ML scorers."""
+
+    def test_parallel_l1_all_metrics_present(self, solid_grey_bgr, solid_grey_tensor):
+        """All five stubbed metrics should appear in output after parallel execution."""
+        scores = analyse(solid_grey_bgr, solid_grey_tensor)
+        assert scores.brisque is not None
+        assert scores.nima_aesthetic is not None
+        assert scores.clip_iqa is not None
+        assert scores.musiq is not None
+        assert scores.niqe is not None
+
+
+# ===========================================================================
+# TestIsPhotograph
+# ===========================================================================
+
+
+class TestIsPhotograph:
+    """_is_photograph() pre-screening gate."""
+
+    def test_blank_image_rejected(self, all_white_bgr, all_white_tensor, monkeypatch):
+        import src.analysis.technical as tech_mod
+
+        # Ensure CLIP is skipped (Tier 1 is sufficient for this case)
+        monkeypatch.setattr(tech_mod, "_clip_prescreener", False, raising=False)
+        monkeypatch.setattr(tech_mod, "_PRESCREENING_ENABLED", True)
+        is_photo, reason = _is_photograph(all_white_bgr, all_white_tensor)
+        assert is_photo is False
+        assert "blank" in reason.lower() or "solid" in reason.lower()
+
+    def test_real_image_passes(self, sharp_edges_bgr, sharp_edges_tensor, monkeypatch):
+        """Checkerboard has high std — passes Tier 1; CLIP mocked as unavailable."""
+        import src.analysis.technical as tech_mod
+
+        monkeypatch.setattr(tech_mod, "_clip_prescreener", False, raising=False)
+        monkeypatch.setattr(tech_mod, "_PRESCREENING_ENABLED", True)
+        is_photo, reason = _is_photograph(sharp_edges_bgr, sharp_edges_tensor)
+        assert is_photo is True
+
+    def test_prescreening_disabled_always_passes(self, all_white_bgr, all_white_tensor, monkeypatch):
+        """When _PRESCREENING_ENABLED is False, all images pass regardless."""
+        import src.analysis.technical as tech_mod
+
+        monkeypatch.setattr(tech_mod, "_PRESCREENING_ENABLED", False)
+        is_photo, _ = _is_photograph(all_white_bgr, all_white_tensor)
+        assert is_photo is True
 
 
 @pytest.mark.parametrize(

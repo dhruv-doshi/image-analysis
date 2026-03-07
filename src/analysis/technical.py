@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+import functools
 import logging
 import math
+import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Any
 
 import cv2
@@ -35,6 +38,77 @@ _clip_iqa = _load("clipiqa+")
 _musiq = _load("musiq")
 _niqe = _load("niqe")
 
+# ---------------------------------------------------------------------------
+# Photo pre-screener (Tier 1: stat check; Tier 2: CLIP zero-shot)
+# ---------------------------------------------------------------------------
+_PRESCREENING_ENABLED = os.getenv("FRAMEIQ_PRESCREENING", "true").lower() == "true"
+
+_clip_prescreener: Any = None  # None = not tried; False = tried and failed; tuple = (model, proc)
+
+_PHOTO_PROMPTS = [
+    "a photograph of a real scene or subject",
+    "a screenshot of a computer screen or interface",
+    "a blank or solid-color image",
+    "a scanned text document or page",
+]
+_ACCEPT_IDX = 0  # index of the "photograph" prompt
+
+
+def _load_clip_prescreener() -> Any:
+    global _clip_prescreener
+    if _clip_prescreener is not None:
+        return _clip_prescreener
+    try:
+        from transformers import CLIPModel, CLIPProcessor
+
+        model = CLIPModel.from_pretrained("openai/clip-vit-base-patch32")
+        processor = CLIPProcessor.from_pretrained("openai/clip-vit-base-patch32")
+        model.eval()
+        _clip_prescreener = (model, processor)
+    except Exception as exc:
+        logger.warning("CLIP prescreener unavailable: %s", exc)
+        _clip_prescreener = False  # sentinel: tried and failed
+    return _clip_prescreener
+
+
+def _is_photograph(bgr_array: np.ndarray, tensor: torch.Tensor) -> tuple[bool, str]:
+    """Return (is_photo, rejection_reason).
+
+    When *_PRESCREENING_ENABLED* is False, always accepts (fail-open for operators
+    who want no gate).  When enabled, runs two tiers:
+    * Tier 1 (~0 ms): rejects blank / solid-colour images via grayscale std.
+    * Tier 2 (~50 ms): CLIP zero-shot classification; skipped if model unavailable.
+    """
+    if not _PRESCREENING_ENABLED:
+        return True, ""
+
+    # Tier 1: blank / solid-colour detection
+    gray = cv2.cvtColor(bgr_array, cv2.COLOR_BGR2GRAY).astype(np.float32)
+    if float(gray.std()) < 8.0:
+        return False, "Image appears to be blank or a solid colour"
+
+    # Tier 2: CLIP zero-shot (skipped when model unavailable)
+    prescreener = _load_clip_prescreener()
+    if not prescreener:
+        return True, ""  # fail open
+    model, processor = prescreener
+    try:
+        from PIL import Image as PilImage
+
+        pil = PilImage.fromarray(bgr_array[:, :, ::-1])
+        inputs = processor(text=_PHOTO_PROMPTS, images=pil, return_tensors="pt", padding=True)
+        with torch.no_grad():
+            logits = model(**inputs).logits_per_image[0]
+        probs = logits.softmax(dim=0)
+        top_idx = int(probs.argmax().item())
+        if top_idx != _ACCEPT_IDX:
+            labels = ["screenshot", "blank image", "document scan"]
+            reject_label = labels[top_idx - 1] if 1 <= top_idx <= 3 else "non-photograph"
+            return False, f"Image does not appear to be a photograph ({reject_label} detected)"
+    except Exception as exc:
+        logger.warning("CLIP prescreener inference failed: %s", exc)
+    return True, ""
+
 
 # ---------------------------------------------------------------------------
 # Public entry point
@@ -64,12 +138,32 @@ def analyse(bgr_array: np.ndarray, tensor: torch.Tensor) -> TechnicalScores:
     ):
         exp = _exposure(gray)
 
+    # Build only the scorers that are enabled and have a loaded model
+    _scorers: dict[str, Any] = {}
+    if is_enabled("brisque") and _brisque is not None:
+        _scorers["brisque"] = functools.partial(_score_brisque, tensor)
+    if is_enabled("nima_aesthetic") and _nima is not None:
+        _scorers["nima"] = functools.partial(_score_nima, tensor)
+    if is_enabled("clip_iqa") and _clip_iqa is not None:
+        _scorers["clip_iqa"] = functools.partial(_score_clip_iqa, tensor)
+    if is_enabled("musiq") and _musiq is not None:
+        _scorers["musiq"] = functools.partial(_score_musiq, tensor)
+    if is_enabled("niqe") and _niqe is not None:
+        _scorers["niqe"] = functools.partial(_score_niqe, tensor)
+
+    ml_results: dict[str, Any] = {}
+    if _scorers:
+        with ThreadPoolExecutor(max_workers=len(_scorers)) as pool:
+            future_to_name = {pool.submit(fn): name for name, fn in _scorers.items()}
+            for future in as_completed(future_to_name):
+                ml_results[future_to_name[future]] = future.result()
+
     return TechnicalScores(
-        brisque=_score_brisque(tensor) if is_enabled("brisque") else None,
-        nima_aesthetic=_score_nima(tensor) if is_enabled("nima_aesthetic") else None,
-        clip_iqa=_score_clip_iqa(tensor) if is_enabled("clip_iqa") else None,
-        musiq=_score_musiq(tensor) if is_enabled("musiq") else None,
-        niqe=_score_niqe(tensor) if is_enabled("niqe") else None,
+        brisque=ml_results.get("brisque") if is_enabled("brisque") else None,
+        nima_aesthetic=ml_results.get("nima") if is_enabled("nima_aesthetic") else None,
+        clip_iqa=ml_results.get("clip_iqa") if is_enabled("clip_iqa") else None,
+        musiq=ml_results.get("musiq") if is_enabled("musiq") else None,
+        niqe=ml_results.get("niqe") if is_enabled("niqe") else None,
         sharpness_laplacian=_sharpness_global(gray) if is_enabled("sharpness_laplacian") else None,
         sharpness_regional=_sharpness_regional(gray) if is_enabled("sharpness_regional") else {},
         noise_sigma=_noise(bgr_array) if is_enabled("noise_sigma") else None,

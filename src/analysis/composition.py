@@ -34,21 +34,58 @@ except Exception as _exc:
 
 
 def _saliency_map(pil_image: Image.Image) -> np.ndarray:
-    """Return float32 saliency map in [0, 1] from rembg alpha channel."""
+    """Return float32 saliency map in [0, 1].
+
+    Default: OpenCV spectral residual (~50–100 ms, no extra dependencies).
+    Set ``use_heavy_saliency`` to True in src/config/metrics.py to use
+    rembg U²-Net instead (slower but more precise).
+    """
     import time
 
-    t = time.perf_counter()
-    try:
-        from rembg import remove  # lazy import — heavy dependency
+    arr = np.array(pil_image.convert("RGB"))
+    bgr = arr[:, :, ::-1]
+    h, w = bgr.shape[:2]
 
-        result = remove(pil_image)
-        alpha = np.array(result)[:, :, 3].astype(np.float32) / 255.0
-        logger.debug("rembg saliency complete  %.2fs", time.perf_counter() - t)
-        return alpha
+    if is_enabled("use_heavy_saliency"):
+        t = time.perf_counter()
+        try:
+            from rembg import remove  # lazy import — heavy dependency
+
+            result = remove(pil_image)
+            alpha = np.array(result)[:, :, 3].astype(np.float32) / 255.0
+            logger.debug("rembg saliency complete  %.2fs", time.perf_counter() - t)
+            return alpha
+        except Exception as exc:
+            logger.warning("rembg saliency failed, falling back to spectral residual: %s", exc)
+
+    # Default: spectral residual saliency (Hou & Zhang 2007) — pure numpy, no contrib needed
+    try:
+        t = time.perf_counter()
+        gray = cv2.cvtColor(bgr, cv2.COLOR_BGR2GRAY).astype(np.float32)
+        # Work at a small scale for speed; resize back at the end
+        small = cv2.resize(gray, (64, 64))
+        # FFT → log amplitude spectrum
+        fft = np.fft.fft2(small)
+        log_amp = np.log(np.abs(fft) + 1e-8)
+        # Spectral residual = log amp minus locally-smoothed log amp
+        smoothed = cv2.blur(log_amp.astype(np.float32), (3, 3))
+        residual = log_amp - smoothed
+        # Normalise residual so max = 0 before exp(); prevents overflow for uniform images
+        residual -= residual.max()
+        # Reconstruct via inverse FFT; saliency ∝ squared magnitude
+        phase = np.angle(fft)
+        sal_small = np.abs(np.fft.ifft2(np.exp(residual + 1j * phase))) ** 2
+        # Gaussian smooth then normalise to [0, 1]
+        sal_small = cv2.GaussianBlur(sal_small.astype(np.float32), (9, 9), 2.5)
+        min_v, max_v = float(sal_small.min()), float(sal_small.max())
+        if max_v > min_v:
+            sal_small = (sal_small - min_v) / (max_v - min_v)
+        # Resize back to original resolution
+        sal_map = cv2.resize(sal_small, (w, h))
+        logger.debug("spectral residual saliency complete  %.2fs", time.perf_counter() - t)
+        return sal_map.astype(np.float32)
     except Exception as exc:
-        logger.warning("rembg saliency failed, using uniform fallback: %s", exc)
-        arr = np.array(pil_image)
-        h, w = arr.shape[:2]
+        logger.warning("spectral residual saliency failed, using uniform fallback: %s", exc)
         return np.ones((h, w), dtype=np.float32)
 
 

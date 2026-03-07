@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import math
@@ -60,7 +61,7 @@ except Exception:
     pass
 
 from src.analysis.composition import analyse as analyse_composition
-from src.analysis.technical import analyse as analyse_technical
+from src.analysis.technical import _is_photograph, analyse as analyse_technical
 from src.config.metrics import log_active_pipeline
 from src.llm.client import synthesise_stream
 from src.llm.synthesizer import (
@@ -159,6 +160,8 @@ async def analyse(
     feature_flag = _parse_features(features)
     suffix = ".jpg" if file.content_type == "image/jpeg" else ".png"
 
+    loop = asyncio.get_running_loop()
+
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(content)
@@ -167,12 +170,16 @@ async def analyse(
             pil_image, bgr_array, tensor = load_image(tmp_path)
             exif = extract_exif(pil_image)
 
+            is_photo, reason = _is_photograph(bgr_array, tensor)
+            if not is_photo:
+                raise HTTPException(422, reason)
+
             t1 = time.perf_counter()
-            tech = analyse_technical(bgr_array, tensor)
+            tech = await loop.run_in_executor(None, analyse_technical, bgr_array, tensor)
             logger.info("L1 technical complete  elapsed=%.2fs", time.perf_counter() - t1)
 
             t2 = time.perf_counter()
-            comp = analyse_composition(bgr_array, pil_image, exif)
+            comp = await loop.run_in_executor(None, analyse_composition, bgr_array, pil_image, exif)
             logger.info(
                 "L2 composition complete  elapsed=%.2fs  scene=%s",
                 time.perf_counter() - t2,
@@ -183,7 +190,7 @@ async def analyse(
             llm_model = os.getenv("LLM_MODEL", "unknown")
             logger.info("L3 LLM call starting  model=%s", llm_model)
             t3 = time.perf_counter()
-            report = synthesise(tech, comp, exif, feature_flag)  # blocking LLM call
+            report = await loop.run_in_executor(None, synthesise, tech, comp, exif, feature_flag)
             logger.info("L3 LLM call complete  elapsed=%.2fs", time.perf_counter() - t3)
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -232,6 +239,8 @@ async def analyse_stream(
     feature_flag = _parse_features(features)
     suffix = ".jpg" if file.content_type == "image/jpeg" else ".png"
 
+    loop = asyncio.get_running_loop()
+
     try:
         with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
             tmp.write(content)
@@ -240,12 +249,16 @@ async def analyse_stream(
             pil_image, bgr_array, tensor = load_image(tmp_path)
             exif = extract_exif(pil_image)
 
+            is_photo, reason = _is_photograph(bgr_array, tensor)
+            if not is_photo:
+                raise HTTPException(422, reason)
+
             t1 = time.perf_counter()
-            tech = analyse_technical(bgr_array, tensor)
+            tech = await loop.run_in_executor(None, analyse_technical, bgr_array, tensor)
             logger.info("L1 technical complete  elapsed=%.2fs", time.perf_counter() - t1)
 
             t2 = time.perf_counter()
-            comp = analyse_composition(bgr_array, pil_image, exif)
+            comp = await loop.run_in_executor(None, analyse_composition, bgr_array, pil_image, exif)
             logger.info(
                 "L2 composition complete  elapsed=%.2fs  scene=%s",
                 time.perf_counter() - t2,
@@ -296,7 +309,8 @@ async def analyse_stream(
             try:
                 raw_text = "".join(raw_chunks)
                 sanitised = _sanitise_llm_json(raw_text)
-                data = json.loads(sanitised)
+                decoder = json.JSONDecoder()
+                data, _ = decoder.raw_decode(sanitised.strip())
                 report = AnalysisReport(**_coerce_report_fields(data))
                 yield f"data: {json.dumps(_json_safe({'type': 'report', 'report': report.model_dump()}))}\n\n"
             except Exception as exc:

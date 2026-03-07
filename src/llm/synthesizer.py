@@ -615,7 +615,8 @@ def synthesise(
         )
 
     try:
-        data = json.loads(raw_text)
+        decoder = json.JSONDecoder()
+        data, _ = decoder.raw_decode(raw_text.strip())
     except json.JSONDecodeError:
         logger.error("LLM returned non-JSON: %.400s", raw_text)
         raise
