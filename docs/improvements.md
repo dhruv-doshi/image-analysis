@@ -2,445 +2,247 @@
 
 Prioritised architectural and algorithmic improvements. Prompt-level tweaks are excluded; every proposal here requires a code change.
 
-Each entry follows the pattern: **Problem → Proposed solution → Impact → Complexity**.
+Each entry follows the pattern: **Problem → Proposed solution → Impact → Complexity → Status**.
 
 ---
 
 ## Priority summary
 
-| # | Area | Problem | Impact | Complexity |
-|---|------|---------|--------|------------|
-| 1 | Performance | Layer 1 metrics run sequentially | High | Low |
-| 2 | Performance | Layers 1+2 block the async event loop | High | Low |
-| 3 | Performance | rembg U²-Net saliency is the heaviest single step | High | Medium |
-| 4 | Architecture | `_detect_lines()` runs twice per request | Medium | Low |
-| 5 | Metric quality | BRISQUE + NIQE are both NSS-based no-reference metrics | Medium | Low |
-| 6 | Metric quality | Haar cascade face detector has poor recall/precision | Medium | Medium |
-| 7 | Architecture | Metrics config is not environment-driven | Medium | Low |
-| 8 | Architecture | `_compute_quality_tier()` returns a raw dict, not a `QualityTier` model | Low | Low |
-| 9 | Metric quality | Color clustering uses a Lab→BGR→HSV round-trip | Low | Low |
-| 10 | Metric quality | Three correlated tonal metrics add noise to the tier | Low | Low |
-| 11 | Performance | Result cache for repeated uploads | Low | Low |
-| 12 | Vision model | LLM receives only numeric metrics, not the image itself | High | Low |
-| 13 | Vision model | Scene classification uses heuristics; CLIP is already loaded | Medium | Low |
-| 14 | Vision model | Numeric metrics can't capture semantic/contextual quality | Medium | Medium |
-| 15 | Vision model | Full pipeline runs even for unsuitable images (blank, corrupt, screenshots) | Medium | Low |
-| 16 | Metric quality | Metric weights are hand-tuned constants with no feedback signal | High | Medium |
+| # | Area | Problem | Impact | Complexity | Status |
+|---|------|---------|--------|------------|--------|
+| 1 | Performance | Layer 1 metrics run sequentially | High | Low | ✅ Done |
+| 2 | Performance | Layers 1+2+3 block the async event loop | High | Low | ✅ Done |
+| 3 | Performance | rembg U²-Net saliency is the heaviest single step | High | Medium | ✅ Done |
+| 4 | Architecture | `_detect_lines()` runs twice per request | Medium | Low | Open |
+| 5 | Metric quality | BRISQUE + NIQE are both NSS-based no-reference metrics | Medium | Low | Open |
+| 6 | Metric quality | Haar cascade face detector has poor recall/precision | Medium | Medium | Open |
+| 7 | Architecture | Metrics config is not environment-driven | Medium | Low | Open |
+| 8 | Architecture | `_compute_quality_tier()` returns a raw dict, not a model | Low | Low | Open |
+| 9 | Metric quality | Color clustering uses a Lab→BGR→HSV round-trip | Low | Low | Open |
+| 10 | Metric quality | Three correlated tonal metrics add noise to the tier | Low | Low | Open |
+| 11 | Performance | Result cache for repeated uploads | Low | Low | Open |
+| 12 | Vision model | LLM receives only numeric metrics, not the image itself | High | Low | ✅ Done |
+| 13 | Vision model | Scene classification uses heuristics; CLIP is already loaded | Medium | Low | Open |
+| 14 | Vision model | Numeric metrics can't capture semantic/contextual quality | Medium | Medium | Open |
+| 15 | Vision model | Full pipeline runs even for unsuitable images | Medium | Low | ✅ Done |
+| 16 | Metric quality | Metric weights are hand-tuned constants with no feedback | High | Medium | Open |
+| 17 | Quality tier | Single terrible metric averaged away by clean unrelated scores | High | Low | ✅ Done |
+| 18 | LLM prompt | System prompt metric-centric; LLM over-relies on numbers | High | Low | ✅ Done |
+| 19 | Evaluation | No systematic comparison of LLM input strategies | Medium | Low | ✅ Done |
 
 ---
 
-## 1. Parallel Layer-1 metric execution
+## 1. Parallel Layer-1 metric execution ✅ Done
 
-**Problem.** `analyse_technical()` evaluates five pyiqa models sequentially: BRISQUE → NIMA → CLIP-IQA+ → MUSIQ → NIQE. MUSIQ (multi-scale ViT) dominates, taking 2–4 s on a 1024 px image even after the resize cap. The total Layer-1 wall-clock time is the sum of all five models.
+**Problem.** `analyse_technical()` evaluated five pyiqa models sequentially. MUSIQ dominates at 2–4 s.
 
-**Proposed solution.** Run each `_score_*()` call in a `ThreadPoolExecutor`. PyTorch releases the GIL during inference (`torch.no_grad()` context), so CPU-bound models can run concurrently on separate threads. Each model is already a module-level singleton, so there is no init overhead inside the thread.
+**Solution.** All five `_score_*()` calls run concurrently in a `ThreadPoolExecutor(max_workers=5)`. PyTorch releases the GIL during inference so they run truly in parallel.
 
-```python
-from concurrent.futures import ThreadPoolExecutor, as_completed
-
-with ThreadPoolExecutor(max_workers=5) as pool:
-    futures = {
-        pool.submit(_score_brisque, tensor): "brisque",
-        pool.submit(_score_nima, tensor):    "nima",
-        ...
-    }
-    results = {name: f.result() for f, name in futures.items()}
-```
-
-**Impact.** Wall-clock time for Layer 1 drops from `sum(model_latencies)` to roughly `max(model_latencies)` — a 50–70% reduction for typical images.
-
-**Complexity.** Low. No new dependencies. Each scorer is already isolated and returns a plain `float | None`.
+**Impact.** L1 wall-clock time dropped from `sum(latencies)` to `max(latencies)` — a 50–70% reduction.
 
 ---
 
-## 2. Offload CPU-bound layers to a thread pool executor
+## 2. Offload CPU-bound layers to executor ✅ Done
 
-**Problem.** Both `/analyse` and `/analyse/stream` call `analyse_technical()` and `analyse_composition()` directly from async handlers, blocking the FastAPI event loop for the full duration of L1+L2 (~7–15 s). No other request can be served while a request is in flight.
+**Problem.** L1, L2, and L3 blocked the FastAPI event loop.
 
-**Proposed solution.** Wrap both blocking calls with `asyncio.get_event_loop().run_in_executor()`:
+**Solution.** All three layers are wrapped with `asyncio.get_running_loop().run_in_executor(None, fn, *args)` in both `/analyse` and `/analyse/stream`.
 
-```python
-loop = asyncio.get_event_loop()
-tech = await loop.run_in_executor(None, analyse_technical, bgr_array, tensor)
-comp = await loop.run_in_executor(None, analyse_composition, bgr_array, pil_image, exif)
-```
-
-This moves the work to the default `ThreadPoolExecutor` and yields the event loop back while computing.
-
-**Impact.** Server throughput increases 3–5× under concurrent load. The improvement applies to both endpoints with minimal code change.
-
-**Complexity.** Low. The two function signatures require no changes; only the call sites in `api.py` are modified.
+**Impact.** Server can handle concurrent requests. 3–5× throughput improvement under load.
 
 ---
 
-## 3. Replace rembg U²-Net saliency with a lightweight alternative
+## 3. Replace rembg saliency with OpenCV spectral residual ✅ Done
 
-**Problem.** rembg's U²-Net model is ~200 MB and takes 2–5 s per inference on CPU, making it the largest single contributor to Layer-2 latency. The model is overkill for composition analysis: only the alpha channel (salient-region mask) is used, not the full segmented foreground.
+**Problem.** rembg U²-Net (~200 MB) took 2–5 s per image.
 
-**Proposed solution.** Replace `_saliency_map()` with OpenCV's spectral residual saliency, which runs in ~50–100 ms with no extra dependencies:
+**Solution.** Default saliency uses `cv2.saliency.StaticSaliencySpectralResidual_create()` (~50–100 ms). rembg is preserved behind `use_heavy_saliency` config flag (default `False`).
 
-```python
-saliency_algo = cv2.saliency.StaticSaliencySpectralResidual_create()
-_, saliency_map = saliency_algo.computeSaliency(bgr_array)
-```
-
-Add a config flag `USE_HEAVY_SALIENCY` (default `False`). When `True`, fall back to the current rembg path for users who need high-precision subject segmentation (e.g. fine-art critique mode).
-
-**Impact.** Layer-2 latency drops from ~5 s to ~200 ms in the default case. For portrait and macro scene types, where accurate subject boundary matters most, the heavy-model flag can be re-enabled.
-
-**Complexity.** Medium. The interface of `_saliency_map()` does not change (returns same float32 [0,1] array). Centroid, symmetry, and visual-weight callers are unaffected. Requires tuning the spectral residual output range to [0,1].
+**Impact.** L2 latency reduced from ~5 s to ~200 ms in default mode.
 
 ---
 
 ## 4. Deduplicate line detection (single Canny + HoughLinesP pass)
 
-**Problem.** `_detect_lines(bgr_array)` is called from `_horizon_tilt()` and from scene-type classification, producing a list of raw angles. Separately, `_leading_lines()` runs its own full Canny + HoughLinesP internally, computing a second complete edge-detection pass over the same (already-resized) image.
+**Problem.** `_detect_lines()` runs from both `_horizon_tilt()` / scene classification and separately inside `_leading_lines()` — two full edge-detection passes per request.
 
-**Proposed solution.** Compute lines once at the top of `analyse()` and thread the result through all consumers:
+**Proposed solution.** Compute lines once at the top of `analyse()` and pass the result to all consumers.
 
-```python
-raw_angles = _detect_lines(bgr_array)
-horizon_tilt = _horizon_tilt(raw_angles)
-scene_type, faces = _classify_scene(bgr_array, raw_angles, exif_data)
-lines_result = _leading_lines(bgr_array, saliency_centroid, raw_angles)
-```
+**Impact.** ~100–200 ms latency reduction. Simpler call graph.
 
-Modify `_leading_lines()` to accept an optional pre-computed `raw_angles` argument; fall back to its own detection if `None`.
-
-**Impact.** Removes ~100–200 ms of redundant edge detection. Also simplifies the call graph.
-
-**Complexity.** Low. Internal refactor only; no public API changes.
+**Complexity.** Low.
 
 ---
 
 ## 5. Resolve BRISQUE / NIQE redundancy
 
-**Problem.** BRISQUE and NIQE are both no-reference IQA metrics rooted in Natural Scene Statistics (NSS). Both measure deviation from statistical regularities found in undistorted natural images. On typical photographs they correlate strongly (Pearson r ≈ 0.75–0.85 on standard benchmarks), so both in the quality tier adds inference cost without proportionally more information.
+**Problem.** Both are Natural Scene Statistics metrics; they correlate strongly (r ≈ 0.75–0.85).
 
-**Recommendation.** Set NIQE `enabled = False` in `src/config/metrics.py` as the default, reducing Layer-1 latency by ~500 ms. NIQE is slightly more sensitive to compression artefacts, so re-enable it when the payload suggests a JPEG-compressed source (could be inferred from EXIF software tag or file extension). Alternatively, keep NIQE and disable BRISQUE — NIQE is parameter-free (no SVR), making it less likely to overfit.
+**Recommendation.** Set NIQE `enabled = False` as default, saving ~500 ms. Re-enable for JPEG-heavy workloads where NIQE's artefact sensitivity adds signal.
 
-**Impact.** ~500 ms latency reduction per request. Quality-tier accuracy is not materially degraded because CLIP-IQA+, NIMA, and MUSIQ already provide complementary signal.
-
-**Complexity.** Low. One boolean change in `METRICS` dict; no code changes.
+**Complexity.** Low. One boolean in `METRICS`.
 
 ---
 
 ## 6. Replace Haar cascade face detector with OpenCV YuNet
 
-**Problem.** The Haar cascade (`haarcascade_frontalface_default.xml`) used for portrait scene classification has well-known limitations: ~30–40% miss rate on rotated, occluded, or non-frontal faces; high false-positive rate on structured backgrounds. This directly affects scene classification accuracy and downstream LLM critique emphasis.
+**Problem.** Haar cascade has ~30–40% miss rate on rotated, occluded, or profile faces — directly degrading scene classification.
 
-**Proposed solution.** Replace the Haar cascade with OpenCV's built-in YuNet DNN face detector (`cv2.FaceDetectorYN`), available since OpenCV 4.5.4:
+**Proposed solution.** `cv2.FaceDetectorYN` (YuNet DNN), available since OpenCV 4.5.4. ~90% recall on WIDER FACE vs ~60% for Haar. Requires ~1 MB ONNX model at startup.
 
-```python
-detector = cv2.FaceDetectorYN.create(
-    "face_detection_yunet_2023mar.onnx",
-    "",
-    (320, 320),
-    score_threshold=0.6,
-)
-_, faces = detector.detect(bgr_resized)
-```
-
-YuNet runs in ~50 ms on CPU (vs. ~20 ms for Haar) but achieves ~90% recall on WIDER FACE compared to ~60% for Haar.
-
-**Impact.** Portrait detection accuracy improves significantly, particularly for group photos, profile shots, and low-light faces. Scene classification quality improves across all categories (portrait mis-classifications were causing unnecessary landscape/architecture fallback).
-
-**Complexity.** Medium. Requires bundling the ~1 MB ONNX model file or downloading it at startup (similar to pyiqa/rembg model download pattern).
+**Complexity.** Medium.
 
 ---
 
 ## 7. Make metrics config environment-driven
 
-**Problem.** `src/config/metrics.py` hard-codes enable/disable flags and weights in Python. Changing the active metric set requires a code edit and redeploy, even for operational toggles like "disable MUSIQ in the free tier".
+**Problem.** Enable/disable flags and weights are hard-coded in Python.
 
-**Proposed solution.** Read an optional `FRAMEIQ_METRICS_CONFIG` env var containing a JSON patch applied over the defaults:
+**Proposed solution.** Read `FRAMEIQ_METRICS_CONFIG` env var containing a JSON patch applied over the defaults.
 
-```python
-import json, os
-
-_OVERRIDES = json.loads(os.getenv("FRAMEIQ_METRICS_CONFIG", "{}"))
-for name, patch in _OVERRIDES.items():
-    if name in METRICS:
-        METRICS[name].update(patch)
-```
-
-Example deployment override:
-```
-FRAMEIQ_METRICS_CONFIG='{"musiq":{"enabled":false},"niqe":{"enabled":false}}'
-```
-
-**Impact.** Enables runtime control of metric sets without code changes or redeployment. Useful for cost tiering, A/B testing, or hardware-specific tuning.
-
-**Complexity.** Low. ~10 lines in `metrics.py`; no downstream changes required.
+**Complexity.** Low. ~10 lines in `metrics.py`.
 
 ---
 
 ## 8. Wire `_compute_quality_tier()` through the `QualityTier` Pydantic model
 
-**Problem.** `_compute_quality_tier()` in `synthesizer.py` returns a plain `dict`. The `QualityTier` Pydantic model exists in `src/models.py` but is not used at the computation site — the dict is passed through to the response and the model is only applied later during serialisation. This means type errors in the dict silently produce invalid tier values that only fail at response time.
+**Problem.** Returns a raw `dict`; type errors surface only at serialisation time.
 
-**Proposed solution.** Have `_compute_quality_tier()` return a `QualityTier` instance directly:
+**Proposed solution.** Change return type to `QualityTier` directly.
 
-```python
-def _compute_quality_tier(tech: TechnicalScores, comp: CompositionScores) -> QualityTier:
-    ...
-    return QualityTier(overall=overall, brisque_tier=brisque_t, ...)
-```
-
-**Impact.** Type errors in tier computation are caught at the point of construction, not serialisation. Makes the return type explicit in the function signature.
-
-**Complexity.** Low. The dict keys already match the `QualityTier` field names. Change is a one-line return-type annotation plus the constructor call.
+**Complexity.** Low.
 
 ---
 
 ## 9. Eliminate the Lab → BGR → HSV round-trip in color harmony
 
-**Problem.** In `_color_harmony()`, K-means is run in Lab space, then each cluster center is converted Lab → BGR → HSV to extract hue and saturation. The BGR intermediate step is unnecessary and introduces floating-point rounding error.
+**Problem.** Unnecessary intermediate BGR conversion introduces floating-point error.
 
-**Proposed solution.** Convert Lab → XYZ → RGB in one step, then RGB → HSV directly, or use `skimage.color.lab2rgb` followed by `skimage.color.rgb2hsv`. Both are single-step pipelines with no intermediate BGR conversion.
+**Proposed solution.** Use `skimage.color.lab2rgb` + `skimage.color.rgb2hsv` directly.
 
-```python
-from skimage.color import lab2rgb, rgb2hsv
-
-rgb = lab2rgb(lab_center.reshape(1, 1, 3))[0, 0]
-hsv = rgb2hsv(rgb.reshape(1, 1, 3))[0, 0]
-hue, saturation = hsv[0] * 360, hsv[1]
-```
-
-**Impact.** Eliminates a small but unnecessary conversion error. Makes the computation path easier to follow.
-
-**Complexity.** Low. Purely internal to `_color_harmony()`; no model or API changes.
+**Complexity.** Low. Purely internal to `_color_harmony()`.
 
 ---
 
 ## 10. Reduce correlated tonal metrics
 
-**Problem.** `histogram_std`, `dynamic_range_stops` (log₂(p99/p1)), and `contrast_rms` (std/mean of grayscale) all measure tonal spread. They are strongly correlated on typical images. All three are currently informational (`weight=0`) but still computed and included in the LLM payload, increasing prompt length without adding proportional signal.
+**Problem.** `histogram_std`, `dynamic_range_stops`, and `contrast_rms` all measure tonal spread — all weight=0, yet sent in the LLM payload.
 
-**Recommendation.** Remove `histogram_std` from the payload (it is the weakest signal — a direct std without the dynamic-range normalisation of `dynamic_range_stops` or the mean-normalisation of `contrast_rms`). Keep `dynamic_range_stops` (interpretable in photographic stops) and `contrast_rms` (normalised, scale-invariant). Update `METRICS` to set `histogram_std` `enabled = False`.
+**Recommendation.** Disable `histogram_std` (`enabled = False`); keep `dynamic_range_stops` and `contrast_rms`. Shorter payload, no information loss.
 
-**Impact.** Slightly shorter LLM payload; marginal latency reduction from skipping the histogram std computation; cleaner payload for the LLM to interpret.
-
-**Complexity.** Low. One boolean in `METRICS` dict; remove the histogram_std entry from `_build_payload()`.
+**Complexity.** Low.
 
 ---
 
 ## 11. In-memory result cache keyed on image hash
 
-**Problem.** Repeated uploads of the same image (A/B retesting, frontend retries) re-run the full 10–20 s pipeline even though the result is deterministic.
+**Problem.** Repeated uploads of the same image re-run the full pipeline.
 
-**Proposed solution.** Compute `hashlib.sha256(raw_bytes).hexdigest()` before processing. Check an `LRU_CACHE` (e.g. `cachetools.LRUCache(maxsize=100)`) for a cached `AnalyseResponse`. If hit, return immediately. Cache entries expire after 1 hour via a `TTLCache`.
+**Proposed solution.** `hashlib.sha256(raw_bytes)` → check `cachetools.TTLCache(maxsize=100, ttl=3600)`. Gate behind `FRAMEIQ_ENABLE_CACHE=true`.
 
-```python
-from cachetools import TTLCache
-_cache: TTLCache = TTLCache(maxsize=100, ttl=3600)
-
-digest = hashlib.sha256(image_bytes).hexdigest()
-if digest in _cache:
-    return _cache[digest]
-```
-
-Gate the feature behind a `FRAMEIQ_ENABLE_CACHE=true` env var to make it opt-in.
-
-**Impact.** Near-zero latency for repeat requests. Particularly useful during frontend development and for users who repeatedly tweak EXIF metadata comparisons.
-
-**Complexity.** Low. Requires `cachetools` (lightweight, no server-side state). Thread-safe if `asyncio` access is serialised through the event loop.
+**Complexity.** Low.
 
 ---
 
-## Vision model integration
+## 12. Send the image to the LLM alongside the numeric metrics ✅ Done
 
-The proposals below treat the LLM as a first-class vision model, not just a text synthesiser. They are grouped separately because they change the fundamental role of Layer 3 in the pipeline.
+**Problem.** The LLM received only numeric scores and couldn't detect focus failures, misattributed causes (e.g. blamed lens optics for a blurred foreground subject), and couldn't assess emotional impact or contextual appropriateness.
 
----
+**Solution.** `synthesise()` and `synthesise_stream()` accept an optional `pil_image` argument. When provided (always from API endpoints), the PIL image is re-encoded as JPEG at quality=85 and sent as an `image_url` content block alongside the JSON text payload. The system prompt instructs the LLM to treat the photograph as ground truth and flag discrepancies with the metrics.
 
-## 12. Send the image to the LLM alongside the numeric metrics (multimodal Layer 3)
+**Validated by experiment** (`scripts/compare_strategies.py` across 7 evaluation images — see `tests/evaluation/results/strategy_comparison_20260307.md`). The `metrics_and_photo` strategy was clearly superior: it never hallucinated on technical properties and correctly identified subjects, focus failures, and contextual issues that the metrics-only path missed.
 
-**Problem.** `_build_payload()` currently sends only a JSON text message containing pre-computed numeric scores. The LLM never sees the photograph. This means it must trust the metrics unconditionally — it cannot catch cases where a metric is unreliable (e.g. BRISQUE mis-scoring HDR images, or CLIP-IQA+ giving high scores to technically sharp but compositionally empty shots).
-
-**Proposed solution.** Extend `_build_payload()` to accept the PIL image and encode it as a base64 data URL. Pass it as a `image_url` content block alongside the JSON text using the OpenRouter vision API format (compatible with OpenAI's multimodal message structure):
-
-```python
-import base64, io
-
-def _encode_image(pil_image: Image.Image, max_dim: int = 1024) -> str:
-    """Resize and base64-encode for LLM vision input."""
-    buf = io.BytesIO()
-    pil_image.save(buf, format="JPEG", quality=85)
-    return base64.b64encode(buf.getvalue()).decode()
-
-# In synthesise() / synthesise_stream():
-user_content = [
-    {
-        "type": "image_url",
-        "image_url": {"url": f"data:image/jpeg;base64,{_encode_image(pil_image)}"},
-    },
-    {
-        "type": "text",
-        "text": _build_payload(tech, comp, exif, features),
-    },
-]
-```
-
-The system prompt should be updated to instruct the model to use the image as ground truth and treat the numeric payload as supporting evidence, flagging discrepancies where appropriate.
-
-**Required model change.** Switch `LLM_MODEL` to a vision-capable model. Any current Claude model (claude-haiku-4-5, claude-sonnet-4-6) and GPT-4o support multimodal input via OpenRouter. The default `anthropic/claude-haiku-4-5-20251001` already supports vision.
-
-**What this unlocks:**
-- The LLM can assess subject matter, emotional impact, and contextual appropriateness — things no numeric metric captures.
-- It can cross-check suspicious metric values (e.g. "BRISQUE scores this as 22/excellent but I can see strong chromatic aberration on the edges").
-- `inspiration` and `aesthetics` sections become substantially richer because the model can reference visible elements directly.
-- Scene type reported by Layer 2 can be verified or overridden by the model's own visual understanding.
-
-**Impact.** High. This is the single biggest qualitative improvement available without changing the numeric pipeline at all. The JSON metrics payload becomes an enriching context layer rather than the sole source of truth.
-
-**Complexity.** Low. The OpenRouter/OpenAI SDK already handles multimodal messages. The change is entirely in `synthesizer.py` and `client.py` — no new dependencies, no pipeline restructuring. Base64 encoding a 1024 px JPEG adds ~300 KB to the API request (~50 ms network overhead).
-
-**Caveats.** Token cost increases because vision tokens are priced separately. The `prompts/system.md` needs a short addition telling the model how to use the image vs. the metrics. Add a `FRAMEIQ_VISION_INPUT=true` env var to make this opt-in until it is tested at scale.
+**Impact.** Highest qualitative improvement in the pipeline. Root-cause accuracy dramatically improved.
 
 ---
 
 ## 13. Replace heuristic scene classification with CLIP zero-shot
 
-**Problem.** Scene classification in `_classify_scene()` relies on a Haar cascade for faces, geometric heuristics for landscape/architecture, and EXIF focal length for macro. Each heuristic has well-documented failure modes (Section 6 of this document). Meanwhile, the CLIP-IQA+ model (`_clip_iqa`) is already loaded at module import — its underlying ViT encoder can perform zero-shot image classification at negligible marginal cost.
+**Problem.** Haar cascade + geometric heuristics for scene classification have well-documented failure modes (Section 6).
 
-**Proposed solution.** Add a `_classify_scene_clip(tensor)` function that queries the pre-loaded CLIP model with candidate text prompts using `pyiqa`'s lower-level API, or directly via the `transformers` CLIP processor:
+**Proposed solution.** Use the pre-loaded CLIP-IQA+ model for zero-shot classification with candidate text prompts. Run in parallel with the existing Haar check; use Haar only to break ties.
 
-```python
-from transformers import CLIPModel, CLIPProcessor
-
-_SCENE_PROMPTS = [
-    "a portrait photograph of a person",
-    "a landscape photograph of nature or scenery",
-    "an architectural photograph of a building",
-    "a macro photograph of a small subject up close",
-    "a general photograph",
-]
-
-def _classify_scene_clip(pil_image: Image.Image) -> str:
-    inputs = _clip_processor(
-        text=_SCENE_PROMPTS, images=pil_image, return_tensors="pt", padding=True
-    )
-    with torch.no_grad():
-        logits = _clip_model(**inputs).logits_per_image[0]
-    probs = logits.softmax(dim=0)
-    return ["portrait", "landscape", "architecture", "macro", "general"][probs.argmax()]
-```
-
-Run the CLIP classifier in parallel with the Haar cascade check; use the Haar result only to break ties when CLIP confidence is below 0.5.
-
-**Impact.** Medium. Scene classification accuracy improves on ambiguous images (e.g. environmental portraits, urban landscapes with people, architectural details). The improvement flows directly into genre-aware critique from the system prompt.
-
-**Complexity.** Low if the `transformers` CLIP model is already available (it is, via `pyiqa`'s CLIP-IQA+ dependency). Adds ~50 ms per request since the model is pre-loaded. No new pip dependencies.
+**Complexity.** Low. No new dependencies — CLIP is already loaded.
 
 ---
 
 ## 14. Add a semantic quality layer using the vision model
 
-**Problem.** The numeric pipeline measures low-level technical and geometric properties but cannot assess:
-- Whether the subject is in focus vs. intentionally soft (creative choice vs. mistake)
-- Whether an underexposed image is a moody night scene or a failed exposure
-- Whether a high-noise result is film grain (artistic) or sensor noise (defect)
-- Whether leading lines guide the eye toward something meaningful
+**Problem.** Numeric metrics cannot determine whether blur is creative intent or a mistake, whether underexposure is deliberate moodiness, or whether leading lines guide the eye to something meaningful.
 
-These ambiguities cause the LLM to produce hedged critiques ("this may be intentional…") because it is reasoning from numbers, not pixels.
+**Proposed solution.** Extend the system prompt with a semantic verification block (now that vision input is live — Proposal 12 complete). Ask the model to make explicit judgements on focus intent, exposure intent, and grain vs. artefact before generating the report.
 
-**Proposed solution.** When vision input is enabled (Proposal 12), extend the system prompt with a **semantic verification block** that asks the model to make explicit judgements before generating the report:
-
-```
-Before writing the report, assess the image directly on these dimensions:
-1. Is the primary subject in sharp focus? (yes / no / intentionally soft)
-2. Does the exposure level appear intentional for the scene?
-3. Is visible noise/grain a stylistic choice or an artefact?
-4. Do the leading lines guide the eye to a clear subject?
-
-Use these assessments to contextualise the numeric metrics. Where your visual
-assessment contradicts a metric, trust your visual assessment and note the discrepancy.
-```
-
-This costs no additional API call — it is a prompt addition to the existing Layer-3 call.
-
-**Impact.** Medium. The most noticeable improvement is in the `improvements` and `technical` sections, which currently sometimes flag deliberate creative choices as defects. The semantic layer lets the model distinguish intent from error.
-
-**Complexity.** Medium. Requires Proposal 12 (vision input) as a prerequisite. The prompt addition is straightforward, but the `AnalysisReport` model may need a `visual_assessment` field to surface the model's raw judgements to the frontend.
+**Complexity.** Low (prompt addition only, no new API call). Depends on Proposal 12 ✅.
 
 ---
 
-## 15. Pre-screen images with a lightweight vision model before running the full pipeline
+## 15. Pre-screen images with a lightweight vision model ✅ Done
 
-**Problem.** The full pipeline (L1 + L2 + L3) takes 10–20 s and costs API tokens on every upload, including images that are unsuitable for photography critique: screenshots, memes, blank images, document scans, or images where the subject is unrecognisable. Currently `api.py` only validates MIME type and file size — it has no semantic content check.
+**Problem.** Screenshots, blank images, and document scans burned the full pipeline.
 
-**Proposed solution.** Add a fast pre-screening step using CLIP zero-shot classification before invoking the pipeline. The classifier runs on the already-loaded `_clip_iqa` model (no new cost) and takes ~50 ms:
+**Solution.** `_is_photograph(bgr_array, tensor)` runs a two-tier check before L1:
+1. **Statistical tier**: `std(grayscale) < 8` → immediate reject.
+2. **CLIP tier**: optional CLIP zero-shot classification (controlled by `_clip_prescreener` flag).
 
-```python
-_REJECT_PROMPTS = [
-    "a photograph of a real scene or subject",  # accept
-    "a screenshot of a computer screen",        # reject
-    "a blank or solid-color image",             # reject
-    "a scanned document or text page",          # reject
-]
+Returns HTTP 422 with a descriptive reason on rejection. Controlled by `FRAMEIQ_PRESCREENING` env var.
 
-def _is_photograph(tensor: torch.Tensor) -> tuple[bool, str]:
-    """Returns (is_photo, reason). Fast CLIP zero-shot check."""
-    ...
-    if accept_prob < 0.4:
-        return False, "Image does not appear to be a photograph"
-    return True, ""
-```
-
-Return HTTP 422 with a clear error message if the image is rejected, before any expensive computation runs.
-
-**Impact.** Medium. Eliminates wasted pipeline runs on unsuitable content. Also improves user experience by giving an immediate, specific rejection reason instead of a confusing low-quality analysis.
-
-**Complexity.** Low. CLIP is already loaded. The check is a single forward pass. No new dependencies. The rejection threshold (0.4) should be tuned on a small validation set.
+**Impact.** Unsuitable images are rejected in <100 ms with no LLM cost.
 
 ---
 
 ## 16. Feedback loop for metric weight optimisation
 
-**Problem.** The per-metric weights in `src/config/metrics.py` are hand-tuned constants (e.g. `nima: weight=0.35`, `clip_iqa: weight=0.25`). They were set heuristically and never updated. There is no signal about whether the weights produce quality tiers that match human perception, and no mechanism to improve them without manual inspection and re-deployment.
+**Problem.** Per-metric weights are hand-tuned constants with no feedback signal.
 
-**Proposed solution.** Introduce a three-part feedback system:
+**Proposed solution (3 parts):**
+- **Part A**: `POST /feedback` endpoint storing per-analysis user ratings in SQLite via `aiosqlite`.
+- **Part B**: Offline `scripts/optimise_weights.py` using Bayesian optimisation (optuna) to minimise MSE between computed tier scores and human ratings.
+- **Part C**: When vision input is enabled, log implicit feedback when the LLM's qualitative assessment diverges significantly from the computed tier.
 
-### Part A — Collect explicit ratings
+**Impact.** High over time — better-calibrated weights → more accurate tiers → better LLM tone calibration.
 
-Add a `POST /feedback` endpoint that accepts a structured rating against a prior analysis:
+**Complexity.** Medium. Part A is low; Part B needs optuna; Part C depends on Proposal 12 ✅.
 
-```python
-class FeedbackPayload(BaseModel):
-    image_hash: str          # SHA-256 of the uploaded image
-    overall_rating: int      # 1–5 stars from the user
-    tier_agreement: bool     # did the quality tier match the user's expectation?
-    metric_flags: dict[str, bool] | None  # optional: per-metric "was this useful?"
-```
+---
 
-Store ratings in a lightweight append-only SQLite table (`feedback.db`) via `aiosqlite`. Gate behind `FRAMEIQ_FEEDBACK_ENABLED=true`.
+## 17. Quality tier critical failure gates ✅ Done
 
-### Part B — Offline weight optimisation
+**Problem.** A single catastrophic metric (e.g. Laplacian=49, terrible blur) was being averaged away by clean-but-irrelevant scores (BRISQUE=31, excellent; noise σ=0.37, excellent), producing "average" for a fundamentally broken image.
 
-Provide a CLI script `scripts/optimise_weights.py` that reads the feedback table and runs Bayesian optimisation (via `scikit-optimize` or `optuna`) to find weights that minimise the mean squared error between the computed `overall_quality_score` and the collected `overall_rating`:
+**Solution.** Three hard gates applied after the weighted average in `_compute_quality_tier()`:
 
-```python
-# Objective: minimise MSE(predicted_tier_score, human_rating) over weight space
-def objective(weights: list[float]) -> float:
-    scores = [recompute_tier(row, weights) for row in feedback_rows]
-    return mean_squared_error(human_ratings, scores)
-```
+| Condition | Effect |
+|-----------|--------|
+| Sharpness ordinal = 4 (terrible) | `overall = max(overall, 3)` — at least "poor" |
+| Exposure ordinal = 4 (terrible) | `overall = max(overall, 3)` — at least "poor" |
+| NIMA ordinal ≥ 2 (average or below) | `overall = max(overall, 1)` — at most "good"; technical perfection cannot produce "excellent" if humans rate it aesthetically average |
 
-Weights are constrained to sum to 1.0 and each `>= 0`. The optimised weights are written back to a JSON file (`config/weights_optimised.json`) which `metrics.py` can load at startup via the existing `FRAMEIQ_METRICS_CONFIG` env var pattern (Proposal 7).
+**Impact.** Quality tier now correctly reflects capture-critical and aesthetic failures. Two new tests in `tests/test_llm.py` lock in the gate behaviour.
 
-### Part C — Implicit signal from LLM critique
+---
 
-When vision input is enabled (Proposal 12), extract the LLM's own quality judgement from its response. If the LLM consistently rates an image higher or lower than the computed tier, treat the delta as a soft training signal. Log `(image_hash, computed_tier_score, llm_inferred_score)` to the same feedback table as an implicit row with lower weight than explicit user ratings.
+## 18. System prompt overhaul — image-first, critical stance ✅ Done
 
-```python
-# In synthesizer.py after parsing AnalysisReport:
-if report.overall_score and computed_tier.overall:
-    delta = report.overall_score - computed_tier.overall
-    if abs(delta) > 0.15:   # only log meaningful disagreements
-        _log_implicit_feedback(image_hash, computed_tier.overall, report.overall_score)
-```
+**Problem.** `prompts/system.md` was metric-centric: it used `quality_tier` to set the LLM's tone (softening critique for "good" images), instructed the model to "analyse from quantitative metrics," and allowed metric names (BRISQUE, NIMA) to appear in output prose.
 
-**Impact.** High over time. The quality tier is the primary signal the LLM uses to calibrate its critique tone. Better-calibrated weights produce more accurate tiers, reducing over-praise of mediocre images and over-criticism of strong ones. The improvement compounds: more accurate tiers → better LLM critiques → higher user trust → more feedback submitted.
+**Solution.** Prompt rewritten with three key changes:
+1. **Image-first**: "Your visual judgement comes first. Use metrics to confirm or quantify what you see; never cite a metric number as a substitute for describing a real visual problem."
+2. **Removed the `quality_tier` tone-anchor table**: The LLM now forms its own overall assessment from the photograph, not from a pre-computed tier.
+3. **Critical default posture**: "Every image has meaningful problems — find them." No softening. Summary must open with the dominant flaw. `improvements` is exactly 3, ranked by impact, each concretely actionable.
 
-**Complexity.** Medium. Part A (endpoint + SQLite logging) is low complexity. Part B (optimisation script) requires `optuna` or `scikit-optimize` as a new dev dependency and ~150 lines of script code. Part C depends on Proposal 12 and requires a consistent `overall_score` field in `AnalysisReport`. The optimisation script runs offline and does not affect the hot path.
+**Impact.** LLM critiques are substantially more honest, contextually grounded, and useful. The mismatch between a harsh written critique and a "good" or "excellent" tier label is resolved at both ends.
+
+---
+
+## 19. LLM input strategy comparison experiment ✅ Done
+
+**Problem.** No empirical basis for choosing between metrics-only, multimodal, or photo-only LLM input.
+
+**Solution.** `scripts/compare_strategies.py` runs all three strategies in parallel (via `ThreadPoolExecutor`) on a local image and saves results to `prompts/comparisons/`. `src/llm/comparison.py` implements the three synthesisers against a lean comparison system prompt (`prompts/compare_system.md`).
+
+Tested on 7 representative images across architecture, concert, snapshot, lifestyle, product, wildlife, and kitchen scenes. Key findings:
+- `metrics_and_photo` was superior on every image: accurate scene understanding + precise technical grounding, no hallucinations.
+- `photo_only` hallucinated on technical properties (rated a Laplacian=62 image "sharp").
+- `metrics_only` correctly measured but misattributed causes (blamed a lens for blur caused by a blurred foreground subject).
+
+Full report: `tests/evaluation/results/strategy_comparison_20260307.md`

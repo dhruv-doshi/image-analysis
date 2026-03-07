@@ -61,7 +61,8 @@ except Exception:
     pass
 
 from src.analysis.composition import analyse as analyse_composition
-from src.analysis.technical import _is_photograph, analyse as analyse_technical
+from src.analysis.technical import _is_photograph
+from src.analysis.technical import analyse as analyse_technical
 from src.config.metrics import log_active_pipeline
 from src.llm.client import synthesise_stream
 from src.llm.synthesizer import (
@@ -190,7 +191,9 @@ async def analyse(
             llm_model = os.getenv("LLM_MODEL", "unknown")
             logger.info("L3 LLM call starting  model=%s", llm_model)
             t3 = time.perf_counter()
-            report = await loop.run_in_executor(None, synthesise, tech, comp, exif, feature_flag)
+            report = await loop.run_in_executor(
+                None, synthesise, tech, comp, exif, feature_flag, pil_image
+            )
             logger.info("L3 LLM call complete  elapsed=%.2fs", time.perf_counter() - t3)
         finally:
             tmp_path.unlink(missing_ok=True)
@@ -296,7 +299,7 @@ async def analyse_stream(
         raw_chunks: list[str] = []
         stream_error: str | None = None
         try:
-            for chunk in synthesise_stream(tech, comp, exif, feature_flag):
+            for chunk in synthesise_stream(tech, comp, exif, feature_flag, pil_image):
                 yield f"data: {json.dumps({'type': 'chunk', 'text': chunk})}\n\n"
                 raw_chunks.append(chunk)
                 chunk_count += 1

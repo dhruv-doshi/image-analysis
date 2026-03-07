@@ -22,18 +22,39 @@ def get_client() -> OpenAI:
     )
 
 
-def synthesise_stream(tech, comp, exif, features) -> Generator[str, None, None]:
+def synthesise_stream(tech, comp, exif, features, pil_image=None) -> Generator[str, None, None]:
     """Stream LLM tokens for the analysis report; yields text chunks."""
     # Lazy imports to avoid circular dependency (synthesizer imports client)
-    from src.llm.synthesizer import _SYSTEM_PROMPT, _build_payload  # noqa: PLC0415
+    from src.llm.synthesizer import (  # noqa: PLC0415
+        _SYSTEM_PROMPT,
+        _build_payload,
+        _pil_to_b64_jpeg,
+    )
 
     payload = _build_payload(tech, comp, exif, features)
-    logger.info(
-        "LLM stream request  model=%s  system_prompt=%d chars  user_payload=%d chars  max_tokens=4096",
-        _MODEL,
-        len(_SYSTEM_PROMPT),
-        len(payload),
-    )
+
+    if pil_image is not None:
+        b64 = _pil_to_b64_jpeg(pil_image)
+        user_content: str | list = [
+            {"type": "text", "text": payload},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        ]
+        logger.info(
+            "LLM stream request  model=%s  system_prompt=%d chars  user_payload=%d chars"
+            "  image_b64=%d chars  max_tokens=4096",
+            _MODEL,
+            len(_SYSTEM_PROMPT),
+            len(payload),
+            len(b64),
+        )
+    else:
+        user_content = payload
+        logger.info(
+            "LLM stream request  model=%s  system_prompt=%d chars  user_payload=%d chars  max_tokens=4096",
+            _MODEL,
+            len(_SYSTEM_PROMPT),
+            len(payload),
+        )
     logger.debug("LLM stream user payload:\n%s", payload)
 
     client = get_client()
@@ -44,7 +65,7 @@ def synthesise_stream(tech, comp, exif, features) -> Generator[str, None, None]:
         max_tokens=4096,
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": payload},
+            {"role": "user", "content": user_content},
         ],
         stream=True,
     ) as stream:

@@ -1,4 +1,4 @@
-# FrameIQ API Contract v1
+# FrameIQ API Contract v2
 
 This is the single source of truth for the FastAPI backend and Next.js frontend.
 **Neither agent may deviate from this spec.** Changes must be coordinated through the main terminal.
@@ -32,11 +32,13 @@ Used by Fly.io health checks and the frontend to confirm the backend is ready.
 
 ### `POST /analyse`
 
+Runs the full three-layer pipeline synchronously and returns a single JSON response.
+
 **Request** — `multipart/form-data`
 
 | Field | Type | Required | Notes |
 |---|---|---|---|
-| `file` | binary (JPEG/PNG) | yes | Max 20MB |
+| `file` | binary (JPEG/PNG) | yes | Max 20 MB |
 | `features` | string | no | Comma-separated. Default: `"full"`. Options: `composition`, `aesthetics`, `technical`, `improvements`, `editing`, `inspiration`, `full` |
 
 **Response `200`** — `application/json`
@@ -59,12 +61,19 @@ Used by Fly.io health checks and the frontend to confirm the backend is ready.
     "brisque_tier": "excellent",
     "sharpness_tier": "average",
     "noise_tier": "good",
-    "exposure_tier": "excellent"
+    "exposure_tier": "excellent",
+    "composition_tier": "good",
+    "nima_tier": "average",
+    "clip_tier": "good",
+    "musiq_tier": "good",
+    "niqe_tier": "good"
   },
   "technical": {
     "brisque": 42.3,
     "nima_aesthetic": 5.6,
     "clip_iqa": 0.72,
+    "musiq": 68.1,
+    "niqe": 3.8,
     "sharpness_laplacian": 312.4,
     "sharpness_regional": {
       "top_left": 280.1,
@@ -98,23 +107,65 @@ Used by Fly.io health checks and the frontend to confirm the backend is ready.
     "symmetry_vertical": 0.71,
     "dominant_line_angles": [45.0, 135.0],
     "leading_lines_converge_to_subject": true,
-    "line_pattern": "diagonal"
+    "line_pattern": "diagonal",
+    "horizon_tilt_degrees": -1.4,
+    "scene_type": "landscape",
+    "color_harmony_type": "complementary",
+    "color_harmony_score": 0.78
   },
   "report": {
-    "summary": "2–3 sentence overall assessment, always present.",
+    "summary": "2–3 sentence overall assessment, always present. Opens with the dominant flaw.",
     "composition": "Composition critique. null if not requested.",
-    "aesthetics": "Mood, colour harmony, visual impact. null if not requested.",
+    "aesthetics": "Mood, colour, visual impact. null if not requested.",
     "technical": "Technical quality with EXIF context. null if not requested.",
-    "improvements": "3–5 ranked shooting/compositional tips. null if not requested.",
+    "improvements": "Exactly 3 ranked, concrete improvements. null if not requested.",
     "editing": "Lightroom/Capture One/Darktable adjustments. null if not requested.",
     "inspiration": "2–3 reference photographers or movements. null if not requested."
   }
 }
 ```
 
-**All `exif` fields are nullable** — omitted if not present in the image.
-**All `report` fields except `summary` are nullable** — omitted if not in `features`.
-**`nima_aesthetic` and `clip_iqa` in `technical` are nullable** — model may fail gracefully.
+**Field nullability:**
+- All `exif` fields are nullable — omitted if not present in the image.
+- All `report` fields except `summary` are nullable — omitted if not in `features`.
+- All `technical` learned metric fields (`nima_aesthetic`, `clip_iqa`, `musiq`, `niqe`) are nullable — model may fail gracefully.
+- All `quality_tier` per-metric fields are nullable — omitted if the metric is disabled in config.
+- `horizon_tilt_degrees` is nullable — `null` if fewer than 2 horizontal lines detected.
+
+---
+
+### `POST /analyse/stream`
+
+Runs L1 and L2 synchronously, then immediately pushes a `metrics` SSE event, and streams the LLM response token-by-token. Lower perceived latency than `/analyse`.
+
+**Request** — same as `/analyse`
+
+**Response `200`** — `text/event-stream` (Server-Sent Events)
+
+Each event is a JSON-encoded line prefixed `data: `, terminated by `\n\n`.
+
+| Event `type` | Payload fields | When emitted |
+|---|---|---|
+| `metrics` | `exif`, `quality_tier`, `technical`, `composition` | Immediately after L1+L2 complete — before any LLM token |
+| `chunk` | `text: string` | Each LLM token as it streams |
+| `report` | `report: AnalysisReport` | After LLM stream ends; backend parses and validates the full JSON |
+| `done` | _(empty)_ | End of stream |
+| `error` | `message: string` | On any failure |
+
+**Example event sequence:**
+```
+data: {"type":"metrics","exif":{...},"quality_tier":{...},"technical":{...},"composition":{...}}
+
+data: {"type":"chunk","text":"{\"summary\":"}
+
+data: {"type":"chunk","text":"\"A well-composed"}
+
+...
+
+data: {"type":"report","report":{"summary":"...","composition":"...",...}}
+
+data: {"type":"done"}
+```
 
 ---
 
@@ -122,8 +173,8 @@ Used by Fly.io health checks and the frontend to confirm the backend is ready.
 
 | Status | When |
 |---|---|
-| `400` | File is not JPEG or PNG, or exceeds 20MB |
-| `422` | Missing required `file` field |
+| `400` | File is not JPEG or PNG, or exceeds 20 MB |
+| `422` | Missing required `file` field, or image rejected by pre-screening gate (blank, solid-colour, non-photograph) |
 | `500` | Pipeline failure (e.g. missing API key, model error) |
 
 ```json
@@ -134,16 +185,16 @@ Used by Fly.io health checks and the frontend to confirm the backend is ready.
 
 ## CORS
 
-Backend must allow:
+Backend allows:
 - `http://localhost:3000` (Next.js dev)
-- The production Vercel URL (set via `ALLOWED_ORIGINS` env var, comma-separated)
+- Any URL in the `ALLOWED_ORIGINS` env var (comma-separated) for production
 
 ---
 
-## TypeScript types (for the frontend agent)
+## TypeScript types (for the frontend)
 
 ```typescript
-// Paste this into frontend/src/types/api.ts
+// frontend/src/types/api.ts
 
 export interface ExifData {
   camera_make?: string
@@ -157,20 +208,34 @@ export interface ExifData {
   image_height?: number
 }
 
+export type TierLabel = 'excellent' | 'good' | 'average' | 'poor' | 'terrible'
+
 export interface QualityTier {
-  overall: 'excellent' | 'good' | 'average' | 'poor' | 'terrible'
-  brisque_tier: 'excellent' | 'good' | 'average' | 'poor' | 'terrible'
-  sharpness_tier: 'excellent' | 'good' | 'average' | 'poor' | 'terrible'
-  noise_tier: 'excellent' | 'good' | 'average' | 'poor' | 'terrible'
-  exposure_tier: 'excellent' | 'good' | 'average' | 'poor' | 'terrible'
+  overall: TierLabel
+  brisque_tier?: TierLabel
+  sharpness_tier?: TierLabel
+  noise_tier?: TierLabel
+  exposure_tier?: TierLabel
+  composition_tier?: TierLabel
+  nima_tier?: TierLabel
+  clip_tier?: TierLabel
+  musiq_tier?: TierLabel
+  niqe_tier?: TierLabel
 }
 
 export interface TechnicalScores {
   brisque: number
   nima_aesthetic?: number
   clip_iqa?: number
+  musiq?: number
+  niqe?: number
   sharpness_laplacian: number
-  sharpness_regional: { top_left: number; top_right: number; bottom_left: number; bottom_right: number }
+  sharpness_regional: {
+    top_left: number
+    top_right: number
+    bottom_left: number
+    bottom_right: number
+  }
   noise_sigma: number
   exposure_clipped_highlights_pct: number
   exposure_clipped_shadows_pct: number
@@ -187,13 +252,22 @@ export interface CompositionScores {
   golden_ratio_alignment_score: number
   best_alignment: 'rule_of_thirds' | 'golden_ratio'
   negative_space_ratio: number
-  visual_weight_quadrants: { top_left: number; top_right: number; bottom_left: number; bottom_right: number }
+  visual_weight_quadrants: {
+    top_left: number
+    top_right: number
+    bottom_left: number
+    bottom_right: number
+  }
   visual_weight_balance: number
   symmetry_horizontal: number
   symmetry_vertical: number
   dominant_line_angles: number[]
   leading_lines_converge_to_subject: boolean
   line_pattern: 'diagonal' | 'horizontal' | 'vertical' | 'mixed' | 'none'
+  horizon_tilt_degrees?: number | null
+  scene_type: 'portrait' | 'landscape' | 'architecture' | 'macro' | 'general'
+  color_harmony_type?: string
+  color_harmony_score?: number
 }
 
 export interface AnalysisReport {
@@ -213,4 +287,12 @@ export interface AnalyseResponse {
   composition: CompositionScores
   report: AnalysisReport
 }
+
+// SSE event types emitted by /analyse/stream
+export type StreamEvent =
+  | { type: 'metrics'; exif: ExifData; quality_tier: QualityTier; technical: TechnicalScores; composition: CompositionScores }
+  | { type: 'chunk'; text: string }
+  | { type: 'report'; report: AnalysisReport }
+  | { type: 'done' }
+  | { type: 'error'; message: string }
 ```

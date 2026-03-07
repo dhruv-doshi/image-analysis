@@ -431,6 +431,87 @@ class TestQualityTierNewMetrics:
         _labels = ["excellent", "good", "average", "poor", "terrible"]
         assert _labels.index(bad_result["overall"]) >= _labels.index(good_result["overall"])
 
+    def test_terrible_sharpness_gates_overall_to_at_least_poor(self, minimal_comp):
+        from src.llm.synthesizer import _compute_quality_tier
+        # Laplacian=10 → terrible sharpness; clean noise and good BRISQUE should not
+        # be able to average this away — overall must be at least "poor".
+        blurry_tech = TechnicalScores(
+            brisque=25.0,           # excellent BRISQUE
+            sharpness_laplacian=10.0,  # terrible blur
+            noise_sigma=0.5,        # excellent noise
+            exposure_clipped_highlights_pct=0.5,
+            exposure_clipped_shadows_pct=0.5,
+            histogram_mean=128.0,
+            histogram_std=50.0,
+            dynamic_range_stops=4.0,
+            contrast_rms=0.4,
+        )
+        result = _compute_quality_tier(blurry_tech, minimal_comp)
+        _labels = ["excellent", "good", "average", "poor", "terrible"]
+        assert _labels.index(result["overall"]) >= _labels.index("poor"), (
+            f"Expected overall >= 'poor', got '{result['overall']}'"
+        )
+
+    def test_average_nima_prevents_excellent_overall(self, minimal_comp):
+        from src.llm.synthesizer import _compute_quality_tier
+        # Technically perfect image (BRISQUE=15, sharpness=4000, noise clean) but
+        # NIMA=5.06 (average human aesthetic rating) — should not be "excellent".
+        tech = TechnicalScores(
+            brisque=15.0,
+            sharpness_laplacian=4000.0,
+            noise_sigma=1.0,
+            nima_aesthetic=5.06,
+            exposure_clipped_highlights_pct=0.5,
+            exposure_clipped_shadows_pct=0.5,
+            histogram_mean=133.0,
+            histogram_std=60.0,
+            dynamic_range_stops=5.0,
+            contrast_rms=0.45,
+        )
+        result = _compute_quality_tier(tech, minimal_comp)
+        assert result["overall"] != "excellent", (
+            f"Aesthetically average image (NIMA=5.06) should not be 'excellent', got '{result['overall']}'"
+        )
+
+    def test_good_nima_does_not_trigger_aesthetic_gate(self, minimal_comp):
+        from src.llm.synthesizer import _compute_quality_tier
+        # NIMA=6.5 (good) — gate should not fire; excellent technical metrics → excellent overall
+        tech = TechnicalScores(
+            brisque=15.0,
+            sharpness_laplacian=4000.0,
+            noise_sigma=1.0,
+            nima_aesthetic=6.5,
+            exposure_clipped_highlights_pct=0.5,
+            exposure_clipped_shadows_pct=0.5,
+            histogram_mean=133.0,
+            histogram_std=60.0,
+            dynamic_range_stops=5.0,
+            contrast_rms=0.45,
+        )
+        result = _compute_quality_tier(tech, minimal_comp)
+        assert result["overall"] == "excellent"
+
+    def test_terrible_exposure_gates_overall_to_at_least_poor(self, minimal_comp):
+        from src.llm.synthesizer import _compute_quality_tier
+        # 40% highlight clipping → terrible exposure; sharp, clean image should not
+        # be rated better than "poor".
+        blown_tech = TechnicalScores(
+            brisque=20.0,
+            sharpness_laplacian=800.0,
+            noise_sigma=1.0,
+            exposure_clipped_highlights_pct=40.0,  # catastrophic clipping
+            exposure_clipped_shadows_pct=0.0,
+            histogram_mean=240.0,
+            histogram_std=30.0,
+            dynamic_range_stops=2.0,
+            contrast_rms=0.2,
+        )
+        result = _compute_quality_tier(blown_tech, minimal_comp)
+        _labels = ["excellent", "good", "average", "poor", "terrible"]
+        assert _labels.index(result["overall"]) >= _labels.index("poor"), (
+            f"Expected overall >= 'poor', got '{result['overall']}'"
+        )
+
 
 @pytest.mark.parametrize("features", [
     AnalysisFeature.COMPOSITION,

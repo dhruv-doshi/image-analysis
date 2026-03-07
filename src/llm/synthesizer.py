@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import base64
+import io
 import json
 import logging
 import math
 import re
 from pathlib import Path
+
+from PIL import Image
 
 from src.config.metrics import get_weight, is_enabled
 from src.llm.client import _MODEL, get_client
@@ -68,6 +72,12 @@ def _coerce_report_fields(data: dict) -> dict:
 
 _PROMPTS_DIR = Path(__file__).parent.parent.parent / "prompts"
 _SYSTEM_PROMPT: str = (_PROMPTS_DIR / "system.md").read_text(encoding="utf-8")
+
+
+def _pil_to_b64_jpeg(image: Image.Image, quality: int = 85) -> str:
+    buf = io.BytesIO()
+    image.convert("RGB").save(buf, format="JPEG", quality=quality)
+    return base64.b64encode(buf.getvalue()).decode()
 
 _FEATURE_NAMES: dict[AnalysisFeature, str] = {
     AnalysisFeature.COMPOSITION: "composition",
@@ -296,6 +306,21 @@ def _compute_quality_tier(tech: TechnicalScores, comp: CompositionScores) -> dic
             weight_sum += w
 
     overall = int(weighted / weight_sum + 0.5) if weight_sum > 0 else 2
+
+    # Critical failure gate: a single terrible score on a capture-critical metric cannot
+    # be averaged away by clean noise or good BRISQUE. Blurry or catastrophically exposed
+    # images are at minimum "poor" regardless of other metrics.
+    if s is not None and s == 4:
+        overall = max(overall, 3)
+    if e is not None and e == 4:
+        overall = max(overall, 3)
+
+    # Aesthetic quality gate: NIMA is the only metric trained specifically on human
+    # aesthetic ratings. Technical perfection (sharp, clean, well-exposed) does not
+    # make an image aesthetically compelling. If NIMA rates the image as average or
+    # below, the overall tier is capped at "good" — never "excellent".
+    if na is not None and na >= 2:
+        overall = max(overall, 1)
 
     result: dict = {"overall": _t(overall)}
     if b is not None:
@@ -553,6 +578,7 @@ def synthesise(
     comp: CompositionScores,
     exif: ExifData,
     features: AnalysisFeature = AnalysisFeature.FULL,
+    pil_image: Image.Image | None = None,
 ) -> AnalysisReport:
     """
     Synthesise a natural-language photo critique via Claude.
@@ -574,12 +600,28 @@ def synthesise(
     client = get_client()
     user_message = _build_payload(tech, comp, exif, features)
 
-    logger.info(
-        "LLM request  model=%s  system_prompt=%d chars  user_payload=%d chars  max_tokens=4096",
-        _MODEL,
-        len(_SYSTEM_PROMPT),
-        len(user_message),
-    )
+    if pil_image is not None:
+        b64 = _pil_to_b64_jpeg(pil_image)
+        user_content: str | list = [
+            {"type": "text", "text": user_message},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        ]
+        logger.info(
+            "LLM request  model=%s  system_prompt=%d chars  user_payload=%d chars"
+            "  image_b64=%d chars  max_tokens=4096",
+            _MODEL,
+            len(_SYSTEM_PROMPT),
+            len(user_message),
+            len(b64),
+        )
+    else:
+        user_content = user_message
+        logger.info(
+            "LLM request  model=%s  system_prompt=%d chars  user_payload=%d chars  max_tokens=4096",
+            _MODEL,
+            len(_SYSTEM_PROMPT),
+            len(user_message),
+        )
     logger.debug("LLM user payload:\n%s", user_message)
 
     response = client.chat.completions.create(
@@ -587,7 +629,7 @@ def synthesise(
         max_tokens=4096,
         messages=[
             {"role": "system", "content": _SYSTEM_PROMPT},
-            {"role": "user", "content": user_message},
+            {"role": "user", "content": user_content},
         ],
     )
     raw_text: str = (response.choices[0].message.content or "").strip()

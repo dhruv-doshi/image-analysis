@@ -6,11 +6,13 @@ FrameIQ is a FastAPI + Next.js web application that accepts an uploaded photogra
 
 The backend is a **three-layer pipeline**:
 
-1. **Layer 1 — Technical Analysis**: learned IQA metrics (pyiqa) + classical computer-vision metrics (OpenCV, scikit-image).
-2. **Layer 2 — Composition Analysis**: salient-object detection (rembg U²-Net) → geometric and perceptual composition scores.
-3. **Layer 3 — LLM Synthesis**: all numeric scores serialised into an annotated JSON payload, sent to Claude via OpenRouter; structured `AnalysisReport` returned.
+1. **Layer 1 — Technical Analysis**: learned IQA metrics (pyiqa) + classical computer-vision metrics (OpenCV, scikit-image). All five pyiqa scorers run in parallel via `ThreadPoolExecutor`.
+2. **Layer 2 — Composition Analysis**: OpenCV spectral-residual saliency (fast default) or rembg U²-Net (opt-in heavy mode) → geometric and perceptual composition scores.
+3. **Layer 3 — LLM Synthesis (multimodal)**: all numeric scores serialised into an annotated JSON payload **plus the photograph itself** (base64 JPEG), sent together to Claude via OpenRouter. The LLM uses the image as ground truth and the metrics as supporting evidence. Structured `AnalysisReport` returned.
 
 A **metrics configuration layer** (`src/config/metrics.py`) sits across Layers 1–3 and controls which metrics are active and how they contribute to the quality tier.
+
+All CPU-bound pipeline work (L1, L2, L3) is offloaded to a thread-pool executor via `asyncio.get_running_loop().run_in_executor()` so the FastAPI event loop is never blocked.
 
 ---
 
@@ -24,37 +26,51 @@ A **metrics configuration layer** (`src/config/metrics.py`) sits across Layers 1
   (multipart upload)      │      │                                                               │
                           │      ▼                                                               │
                           │  ┌───────────────────────┐                                          │
+                          │  │   Pre-screening gate   │  _is_photograph() — CLIP zero-shot      │
+                          │  │   src/analysis/        │  + statistical check                    │
+                          │  │     technical.py       │  → HTTP 422 if not a photograph         │
+                          │  └──────────┬────────────┘                                          │
+                          │             │                                                        │
+                          │             ▼                                                        │
+                          │  ┌───────────────────────┐                                          │
                           │  │   Image Loader         │  PIL → RGB → resize (≤1024px) →         │
                           │  │   src/utils/loader.py  │  pil_image + BGR ndarray + float32 tensor│
                           │  │                        │  EXIF metadata extracted                 │
                           │  └──────────┬────────────┘                                          │
                           │             │                                                        │
                           │             ▼                                                        │
-                          │  ┌───────────────────────┐                                          │
-                          │  │  Layer 1 — Technical   │  pyiqa learned metrics                  │
-                          │  │  src/analysis/         │  BRISQUE · NIMA · CLIP-IQA+             │
-                          │  │    technical.py        │  MUSIQ · NIQE                           │
-                          │  │                        │  + classical CV sharpness / noise /      │
-                          │  │  Output: TechnicalScores│   exposure / dynamic range / contrast  │
+                          │  ┌───────────────────────┐  Parallel ThreadPoolExecutor             │
+                          │  │  Layer 1 — Technical   │  BRISQUE · NIMA · CLIP-IQA+             │
+                          │  │  src/analysis/         │  MUSIQ · NIQE  ←── all concurrent       │
+                          │  │    technical.py        │  + classical CV sharpness / noise /      │
+                          │  │                        │    exposure / dynamic range / contrast   │
+                          │  │  Output: TechnicalScores│                                        │
                           │  └──────────┬────────────┘                                          │
                           │             │                                                        │
                           │             ▼                                                        │
                           │  ┌───────────────────────┐                                          │
-                          │  │  Layer 2 — Composition │  rembg saliency → centroid              │
-                          │  │  src/analysis/         │  RoT / GR alignment · neg. space        │
-                          │  │    composition.py      │  symmetry · leading lines               │
+                          │  │  Layer 2 — Composition │  OpenCV spectral residual saliency      │
+                          │  │  src/analysis/         │  (rembg U²-Net opt-in via config)       │
+                          │  │    composition.py      │  RoT / GR alignment · neg. space        │
+                          │  │                        │  symmetry · leading lines               │
                           │  │                        │  horizon tilt · scene class             │
                           │  │  Output: CompositionScores  color harmony                        │
                           │  └──────────┬────────────┘                                          │
                           │             │                                                        │
                           │             ▼                                                        │
-                          │  ┌───────────────────────┐                                          │
-                          │  │  Layer 3 — LLM Synth   │  Annotated JSON payload →               │
-                          │  │  src/llm/              │  Claude (OpenRouter)                    │
-                          │  │    synthesizer.py      │  Structured AnalysisReport JSON         │
-                          │  │    client.py           │  parsed back                            │
-                          │  │  Output: AnalysisReport│                                         │
-                          │  └──────────┬────────────┘                                          │
+                          │  ┌────────────────────────────────────────┐                         │
+                          │  │  Layer 3 — LLM Synthesis (multimodal)  │                         │
+                          │  │  src/llm/synthesizer.py                │                         │
+                          │  │  src/llm/client.py                     │                         │
+                          │  │                                        │                         │
+                          │  │  User message content:                 │                         │
+                          │  │    [text]  annotated JSON payload      │                         │
+                          │  │    [image] base64 JPEG of photo        │                         │
+                          │  │                                        │                         │
+                          │  │  → Claude (OpenRouter)                 │                         │
+                          │  │  ← Structured AnalysisReport JSON      │                         │
+                          │  │  Output: AnalysisReport                │                         │
+                          │  └──────────┬─────────────────────────────┘                         │
                           │             │                                                        │
                           │             ▼                                                        │
   JSON response ◄─────────│  AnalyseResponse { exif, quality_tier, technical,                   │
@@ -68,7 +84,7 @@ A **metrics configuration layer** (`src/config/metrics.py`) sits across Layers 1
 
 ### `load_image(source) → (pil_image, bgr_array, tensor)`
 
-`source` may be a file path (`str`/`Path`) or a file-like object (e.g. FastAPI `UploadFile`).
+`source` may be a file path (`str`/`Path`) or a file-like object.
 
 | Step | Detail |
 |------|--------|
@@ -92,9 +108,18 @@ A **metrics configuration layer** (`src/config/metrics.py`) sits across Layers 1
 
 All pyiqa models are instantiated **once at module import** as module-level singletons (`_brisque`, `_nima`, `_clip_iqa`, `_musiq`, `_niqe`). Each metric call is wrapped in `try/except` — on failure the field is `NaN` / `None`.
 
-Every metric is guarded by `is_enabled()` from the config layer (Section 10) before being computed or included in results.
+Every metric is guarded by `is_enabled()` from the config layer before being computed. All five pyiqa scorers run **concurrently** inside a `ThreadPoolExecutor` — wall-clock time is `max(model_latencies)` rather than `sum(model_latencies)`.
 
-### 4.1 Learned Metrics (pyiqa)
+### 4.1 Pre-screening Gate (`_is_photograph`)
+
+Before L1 runs, `_is_photograph(bgr_array, tensor)` performs a two-tier check:
+
+- **Tier 1 (statistical)**: If `std(grayscale) < 8`, the image is near-blank/solid → immediate reject.
+- **Tier 2 (CLIP)**: If `_clip_prescreener` is enabled, uses the loaded CLIP-IQA+ model to zero-shot classify the image as photograph vs. non-photograph.
+
+Returns `(True, "")` or `(False, reason_string)`. On rejection the API returns HTTP 422. Controlled by the `FRAMEIQ_PRESCREENING` env var.
+
+### 4.2 Learned Metrics (pyiqa)
 
 | Field | Model | How it works | Scale | Interpretation |
 |-------|-------|--------------|-------|----------------|
@@ -104,7 +129,7 @@ Every metric is guarded by `is_enabled()` from the config layer (Section 10) bef
 | `musiq` | MUSIQ | Multi-scale ViT that patches the image at several resolutions; trained on multiple IQA datasets | 0–100 | Higher = better. Direct perceptual quality score |
 | `niqe` | NIQE | No-reference metric based on natural scene statistics; detects compression artefacts and unnatural distortions | lower = better | <3 excellent, 3–5 good, 5–8 average, 8–12 poor, ≥12 terrible |
 
-### 4.2 Classical CV Metrics
+### 4.3 Classical CV Metrics
 
 | Field | Computation | Scale / Interpretation |
 |-------|-------------|------------------------|
@@ -128,12 +153,11 @@ Every sub-metric is guarded by `is_enabled()` before computation.
 
 `_saliency_map(bgr_image) → float32 [0,1] H×W array`
 
-- Calls **rembg** with U²-Net (`u2net`) to segment the salient foreground.
-- Extracts the alpha channel of the RGBA output as the saliency weight.
-- Falls back to a uniform map (all ones) on import failure or exception.
-- The resulting map is stored in `CompositionScores.saliency_map` (`exclude=True`) — available for visualisation within a request but not serialised in API responses.
+**Default (fast):** OpenCV spectral residual saliency (`cv2.saliency.StaticSaliencySpectralResidual_create()`). Runs in ~50–100 ms with no extra dependencies.
 
-> **Known inefficiency**: `_detect_lines()` is called once for horizon tilt / scene classification and `_leading_lines()` runs its own separate Canny + HoughLinesP pass internally — two full edge-detection passes over the same image.
+**Heavy mode (opt-in):** rembg U²-Net (`u2net`). Enabled by setting `use_heavy_saliency` to `True` in `src/config/metrics.py`. Takes 2–5 s and requires the ~200 MB U²-Net model. Falls back to a uniform map on failure.
+
+The saliency map is stored in `CompositionScores.saliency_map` (`exclude=True`) — available within a request but not serialised in API responses.
 
 ### 5.2 Centroid & Alignment
 
@@ -223,7 +247,7 @@ Every sub-metric is guarded by `is_enabled()` before computation.
 
 ### 6.1 Quality Tier Computation
 
-Before calling the LLM, `_compute_quality_tier()` converts raw metrics to **ordinal scores** (0 = excellent … 4 = terrible) and aggregates them into a weighted average. Weights are pulled from `get_weight()` in the config layer (Section 10), so disabling a metric automatically removes it from the tier calculation.
+Before calling the LLM, `_compute_quality_tier()` converts raw metrics to **ordinal scores** (0 = excellent … 4 = terrible) and aggregates them into a weighted average. Weights are pulled from `get_weight()` in the config layer, so disabling a metric automatically removes it from the tier calculation.
 
 | Metric | Ordinal thresholds | Config weight |
 |--------|--------------------|---------------|
@@ -237,39 +261,52 @@ Before calling the LLM, `_compute_quality_tier()` converts raw metrics to **ordi
 | NIQE | <3→0, <5→1, <8→2, <12→3, ≥12→4 | 1.0 |
 | Composition | `_composition_ord()`: penalty based on `visual_weight_balance` and `rot_alignment_score` | 2.0 |
 
-`_composition_ord()` converts the composition sub-scores into a single ordinal using visual weight balance (imbalanced > 3.0 → poor) and RoT alignment (>0.7 → poor).
+**Critical failure gates (applied after the weighted average):**
 
-The return value of `_compute_quality_tier()` is a plain `dict` that maps to the `QualityTier` Pydantic model (see Section 8), with individual tier strings for each enabled metric plus an `overall` tier.
+These prevent a single catastrophic failure from being averaged away by clean scores on unrelated metrics.
+
+| Condition | Effect | Rationale |
+|-----------|--------|-----------|
+| Sharpness ordinal = 4 (terrible) | `overall ≥ poor` | A blurry image is at minimum "poor" regardless of clean noise or good BRISQUE |
+| Exposure ordinal = 4 (terrible) | `overall ≥ poor` | Catastrophically under/over-exposed images cannot be "average" or better |
+| NIMA ordinal ≥ 2 (average or below) | `overall ≤ good` | Technical perfection does not make an image aesthetically compelling; NIMA is the only metric trained on human aesthetic ratings — if it says average, the overall cannot be "excellent" |
 
 ### 6.2 Payload Construction
 
-`_build_payload(tech, comp, exif, features)` serialises all scores into a JSON **user message**. Every numeric field is wrapped with both a `value` and a `scale` description string so the LLM receives human-readable interpretation bounds alongside each number. The payload also includes a `requested_features` list so the LLM knows which output sections to generate.
-
-Example snippet:
-```json
-{
-  "brisque": {
-    "value": 28.4,
-    "scale": "0–100, lower is better; <30 excellent, 30–50 good, 50–65 fair, >65 poor"
-  },
-  "niqe": {
-    "value": 4.1,
-    "scale": "lower is better; <3 excellent, 3–5 good, 5–8 average, >8 poor"
-  },
-  "requested_features": ["composition", "technical", "improvements"]
-}
-```
+`_build_payload(tech, comp, exif, features)` serialises all scores into a JSON text block. Every numeric field is wrapped with both a `value` and a `scale` description string. The payload also includes a `requested_features` list so the LLM knows which output sections to generate.
 
 Metrics disabled in the config layer are omitted from the payload entirely.
 
-### 6.3 LLM Call
+### 6.3 Multimodal LLM Input
+
+`synthesise(tech, comp, exif, features, pil_image=None)` and `synthesise_stream(tech, comp, exif, features, pil_image=None)` accept an optional PIL image.
+
+When `pil_image` is provided (as it always is from the API endpoints):
+- The image is re-encoded as a JPEG at quality=85 and base64-encoded.
+- The user message is a **content list**: `[{"type": "text", "text": payload}, {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64,..."}}]`.
+- When `pil_image` is `None` (e.g. in tests), content is a plain string — the text-only path remains available for backward compatibility.
+
+The LLM treats the **photograph as ground truth** and the metrics as supporting evidence. The system prompt (`prompts/system.md`) instructs the model to flag discrepancies between what it sees and what the metrics report.
+
+### 6.4 System Prompt (`prompts/system.md`)
+
+The system prompt establishes a **critical, fault-finding posture**:
+
+- "Your visual judgement comes first." — metrics confirm or quantify; they do not conclude.
+- "Every image has meaningful problems — find them." — no softening of faults.
+- Metric names (BRISQUE, NIMA, etc.) must not appear in output prose; only human-readable descriptions of what was observed.
+- `quality_tier` is explicitly ignored by the LLM — it forms its own overall assessment from the image.
+- Genre-aware guidance for portrait, landscape, architecture, macro, and general scenes.
+- `improvements` must be exactly 3, concrete, ranked by impact.
+
+### 6.5 LLM Call
 
 | Aspect | Detail |
 |--------|--------|
 | Client | OpenAI-compatible SDK pointed at OpenRouter base URL |
 | Auth | `OPENROUTER_API_KEY` environment variable |
 | Model | `LLM_MODEL` env var (default: `anthropic/claude-haiku-4-5-20251001`) |
-| System prompt | `prompts/system.md` — expert photography critic persona, quality-tier tone anchoring table, genre-aware guidance sections (portrait / landscape / architecture / macro) |
+| System prompt | `prompts/system.md` — critical photography critic persona, image-first stance, genre-aware guidance |
 | Max tokens | 4096 |
 | Sync call | `synthesise()` → returns complete `AnalysisReport` |
 | Streaming | `synthesise_stream()` → SSE generator yielding text chunks; guards `if not chunk.choices: continue` to handle OpenRouter keepalive empty-choices chunks |
@@ -284,7 +321,7 @@ Metrics disabled in the config layer are omitted from the payload entirely.
 | `done` | `{}` | End of stream |
 | `error` | `{detail: string}` | On any exception |
 
-### 6.4 JSON Sanitisation (`_sanitise_llm_json`)
+### 6.6 JSON Sanitisation (`_sanitise_llm_json`)
 
 The LLM output is cleaned before `json.loads()`:
 
@@ -314,17 +351,15 @@ The LLM output is cleaned before `json.loads()`:
 |--------|------|-------------|----------|
 | `GET` | `/health` | — | `{"status": "ok", "models_loaded": bool}` |
 | `POST` | `/analyse` | `file` (UploadFile), `features` (str, default `"full"`) | `AnalyseResponse` JSON |
-| `POST` | `/analyse/stream` | same | SSE stream (see Section 6.3) |
+| `POST` | `/analyse/stream` | same | SSE stream (see Section 6.5) |
 
 ### Feature Flags (`_parse_features`)
 
-The `features` form field accepts a comma-separated list (e.g. `"composition,technical"`) or `"full"`. It is parsed by `_parse_features()` into an `AnalysisFeature` flag (a bitfield). The flag controls which sections the LLM generates and which fields appear in the `AnalysisReport`.
-
-`_FEATURE_MAP` in `api.py` maps string names to `AnalysisFeature` members: `composition`, `aesthetics`, `technical`, `improvements`, `editing`, `inspiration`, `full`.
+The `features` form field accepts a comma-separated list (e.g. `"composition,technical"`) or `"full"`. Parsed by `_parse_features()` into an `AnalysisFeature` flag (a bitfield). The flag controls which sections the LLM generates and which fields appear in the `AnalysisReport`.
 
 ### Helpers
 
-- `_json_safe()` — Recursively replaces `nan`/`inf` in metric dicts before JSON serialisation (the JSON spec forbids these values).
+- `_json_safe()` — Recursively replaces `nan`/`inf` in metric dicts before JSON serialisation.
 
 ---
 
@@ -333,8 +368,6 @@ The `features` form field accepts a comma-separated list (e.g. `"composition,tec
 All models are **Pydantic** `BaseModel`.
 
 ### `AnalysisFeature` (Flag enum)
-
-Bitfield controlling which LLM output sections are requested:
 
 | Member | Value |
 |--------|-------|
@@ -363,7 +396,7 @@ Camera make, model, ISO, shutter speed, aperture (f-number), focal length, lens 
 
 All centroid, alignment, negative-space, visual-weight, symmetry, leading-lines, horizon-tilt, scene-type, and color-harmony fields described in Section 5.
 
-`saliency_map: Any | None` — declared with `exclude=True`; never appears in serialised API responses but is available within the request lifecycle for visualisation.
+`saliency_map: Any | None` — declared with `exclude=True`; never appears in serialised API responses.
 
 ### `AnalysisReport` (7 string fields)
 
@@ -379,14 +412,7 @@ All centroid, alignment, negative-space, visual-weight, symmetry, leading-lines,
 
 ### `QualityTier`
 
-Pydantic `BaseModel` with `overall` (tier string) plus per-metric tier fields:
-
-`overall`, `brisque_tier`, `sharpness_tier`, `noise_tier`, `exposure_tier`, `composition_tier`, `nima_tier`, `clip_tier`, `musiq_tier`, `niqe_tier`
-
-Each per-metric tier is `str | None` — `None` if the metric is disabled in config.
-
-### `AnalyseResponse`
-Top-level response: `exif` + `quality_tier` + `technical` + `composition` + `report`.
+`overall`, `brisque_tier`, `sharpness_tier`, `noise_tier`, `exposure_tier`, `composition_tier`, `nima_tier`, `clip_tier`, `musiq_tier`, `niqe_tier` — each `str | None` (None if metric disabled).
 
 ---
 
@@ -397,7 +423,8 @@ Top-level response: `exif` + `quality_tier` + `technical` + `composition` + `rep
 | `OPENROUTER_API_KEY` | required | OpenRouter API key for LLM calls |
 | `LLM_MODEL` | `anthropic/claude-haiku-4-5-20251001` | Model identifier passed to OpenRouter |
 | `LOG_LEVEL` | `INFO` | Python logging level for the API server |
-| `ALLOWED_ORIGINS` | _(none)_ | Comma-separated extra CORS origins (in addition to `localhost:3000`) |
+| `ALLOWED_ORIGINS` | _(none)_ | Comma-separated extra CORS origins |
+| `FRAMEIQ_PRESCREENING` | `True` (code default) | Enable/disable pre-screening gate |
 
 All variables are loaded from `.env` via `python-dotenv`. Never hard-code keys.
 
@@ -417,19 +444,18 @@ class MetricConfig(TypedDict):
 
 ### `METRICS` dict
 
-Hard-coded dict of 28 metrics (`str → MetricConfig`). Covers all Layer-1 and Layer-2 metrics. Selected defaults:
-
 | Metric | Enabled | Weight | Notes |
 |--------|---------|--------|-------|
 | `brisque` | `True` | 3.0 | |
-| `nima_aesthetic` | `True` | 2.0 | |
-| `clip_iqa` | `True` | 1.0 | |
+| `nima_aesthetic` | `True` | 2.0 | Also drives aesthetic gate |
+| `clip_iqa` | `True` | 1.0 | Also used for pre-screening |
 | `musiq` | `True` | 1.5 | |
 | `niqe` | `True` | 1.0 | |
-| `sharpness_laplacian` | `True` | 2.0 | |
+| `sharpness_laplacian` | `True` | 2.0 | Also drives sharpness gate |
 | `sharpness_regional` | `True` | 0.0 | informational only |
 | `noise_sigma` | `True` | 2.0 | |
 | `rot_alignment_score` | `True` | 2.0 | drives `_composition_ord()` |
+| `use_heavy_saliency` | `False` | 0.0 | Set `True` to use rembg U²-Net instead of OpenCV spectral residual |
 | _(all others)_ | `True` | 0.0 | informational only |
 
 ### Public API
@@ -438,13 +464,32 @@ Hard-coded dict of 28 metrics (`str → MetricConfig`). Covers all Layer-1 and L
 |----------|-----------|-----------|
 | `is_enabled` | `(metric: str) → bool` | Returns `False` for unknown metrics |
 | `get_weight` | `(metric: str) → float` | Returns `0.0` for unknown metrics |
-| `log_active_pipeline` | `() → None` | Logs formatted summary of active metrics at startup |
-
-`log_active_pipeline()` is called during the FastAPI lifespan startup hook.
+| `log_active_pipeline` | `() → None` | Logs formatted summary at startup |
 
 ---
 
-## 11. Key Conventions
+## 11. LLM Strategy Experiment (`src/llm/comparison.py`)
+
+A standalone comparison module used to validate the multimodal approach. Tested three strategies across 7 evaluation images (`tests/evaluation/images/`):
+
+| Strategy | Input | Key finding |
+|----------|-------|-------------|
+| `metrics_only` | JSON payload only | Correctly measures technical issues but blind to subject identity; misattributes root causes (e.g. blamed a lens for blur caused by a blurred foreground person) |
+| `metrics_and_photo` | JSON payload + image | Best across all images: correct scene understanding + precise technical grounding. Never hallucinated. Selected as the production strategy. |
+| `photo_only` | Image only | Strong scene understanding but hallucinates on technical properties (rated a Laplacian=62 image as "sharp") |
+
+Full results: `tests/evaluation/results/strategy_comparison_20260307.md`
+Raw JSON per-image: `prompts/comparisons/`
+
+Run a new comparison:
+```bash
+python scripts/compare_strategies.py path/to/photo.jpg
+python scripts/compare_strategies.py path/to/photo.jpg --no-llm   # L1+L2 only
+```
+
+---
+
+## 12. Key Conventions
 
 - `uploads/` is gitignored — never commit user images.
 - Model weights (pyiqa, rembg U²-Net) are downloaded at runtime — never commit weight files.
@@ -453,3 +498,4 @@ Hard-coded dict of 28 metrics (`str → MetricConfig`). Covers all Layer-1 and L
 - rembg uses a lazy import inside `_saliency_map()` and falls back to a uniform map on failure.
 - `saliency_map` is excluded from all serialised output (`exclude=True` on the Pydantic field).
 - Torch multiprocessing sharing strategy is set to `"file_system"` at startup to prevent named-semaphore leaks on macOS.
+- The LLM sees both the photograph and the numeric metrics. It is instructed to trust its visual assessment first and use metrics as supporting evidence.
