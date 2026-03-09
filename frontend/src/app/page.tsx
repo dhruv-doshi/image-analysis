@@ -1,10 +1,14 @@
 'use client'
 
 import { useEffect, useRef, useState } from 'react'
-import { analyseImageStream, checkHealth } from '@/lib/api'
-import type { AnalyseResponse } from '@/types/api'
+import { analyseImageStream, checkHealth, fetchDepth } from '@/lib/api'
+import type { AnalyseResponse, DepthResult } from '@/types/api'
 import type { MetricsPayload } from '@/lib/api'
 import AnalysisResult from '@/components/AnalysisResult'
+import dynamic from 'next/dynamic'
+
+// Loaded client-side only — Three.js relies on browser APIs (WebGL, canvas)
+const SceneViewer = dynamic(() => import('@/components/SceneViewer'), { ssr: false })
 
 export default function Home() {
   const [file, setFile] = useState<File | null>(null)
@@ -16,6 +20,9 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null)
   const [backendReady, setBackendReady] = useState<boolean | null>(null)
   const [dragging, setDragging] = useState(false)
+  const [depthResult, setDepthResult] = useState<DepthResult | null>(null)
+  const [depthLoading, setDepthLoading] = useState(false)
+  const [depthError, setDepthError] = useState<string | null>(null)
   const inputRef = useRef<HTMLInputElement>(null)
   const reportBufferRef = useRef('')
   const partialMetricsRef = useRef<MetricsPayload | null>(null)
@@ -30,8 +37,25 @@ export default function Home() {
     setPartialMetrics(null)
     setStreamingReport(false)
     setError(null)
+    setDepthResult(null)
+    setDepthError(null)
     const url = URL.createObjectURL(f)
     setPreview(url)
+  }
+
+  async function onShow3DScene() {
+    if (!file) return
+    setDepthLoading(true)
+    setDepthError(null)
+    setDepthResult(null)
+    try {
+      const result = await fetchDepth(file)
+      setDepthResult(result)
+    } catch (err) {
+      setDepthError(err instanceof Error ? err.message : '3D scene failed')
+    } finally {
+      setDepthLoading(false)
+    }
   }
 
   function onInputChange(e: React.ChangeEvent<HTMLInputElement>) {
@@ -185,8 +209,8 @@ export default function Home() {
           )}
         </div>
 
-        {/* Analyse button */}
-        <div className="flex justify-center">
+        {/* Action buttons */}
+        <div className="flex justify-center gap-3 flex-wrap">
           <button
             onClick={onAnalyse}
             disabled={!file || loading}
@@ -198,16 +222,32 @@ export default function Home() {
               <span className="flex items-center gap-2">
                 <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
                   <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                  <path
-                    className="opacity-75"
-                    fill="currentColor"
-                    d="M4 12a8 8 0 018-8v8H4z"
-                  />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                 </svg>
                 Analysing…
               </span>
             ) : (
               'Analyse'
+            )}
+          </button>
+
+          <button
+            onClick={onShow3DScene}
+            disabled={!file || depthLoading}
+            className="px-8 py-3 rounded-lg font-medium text-sm transition-all
+              bg-violet-700 hover:bg-violet-600 disabled:bg-zinc-800 disabled:text-zinc-500
+              disabled:cursor-not-allowed focus:outline-none focus:ring-2 focus:ring-violet-500"
+          >
+            {depthLoading ? (
+              <span className="flex items-center gap-2">
+                <svg className="animate-spin w-4 h-4" viewBox="0 0 24 24" fill="none">
+                  <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                  <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
+                </svg>
+                Building scene…
+              </span>
+            ) : (
+              '3D Scene'
             )}
           </button>
         </div>
@@ -216,6 +256,20 @@ export default function Home() {
         {error && (
           <div className="rounded-lg border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-300">
             {error}
+          </div>
+        )}
+
+        {/* 3D Scene */}
+        {(depthResult || depthError) && (
+          <div className="bg-zinc-900 border border-zinc-800 rounded-xl p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-zinc-300">3D Scene Explorer</h2>
+            {depthError ? (
+              <div className="rounded-lg border border-red-800 bg-red-950/40 px-4 py-3 text-sm text-red-300">
+                {depthError}
+              </div>
+            ) : depthResult ? (
+              <SceneViewer depthResult={depthResult} />
+            ) : null}
           </div>
         )}
 

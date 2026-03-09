@@ -73,6 +73,15 @@ export interface AnalysisReport {
   inspiration?: string
 }
 
+export interface DepthResult {
+  width: number
+  height: number
+  /** base64-encoded grayscale PNG; brighter pixel = closer to camera */
+  depth_map: string
+  /** base64-encoded RGB JPEG at the same resolution as depth_map */
+  image: string
+}
+
 export interface AnalyseResponse {
   exif: ExifData
   quality_tier: QualityTier

@@ -137,6 +137,49 @@ def health() -> dict:
     return {"status": "ok", "models_loaded": _models_loaded}
 
 
+@app.post("/depth")
+async def depth(file: UploadFile = File(...)) -> dict:
+    """Monocular depth estimation endpoint.
+
+    Runs Depth Anything V2 Small on the uploaded image and returns:
+      width, height  — dimensions of the downscaled grid (≤256 px on long edge)
+      depth_map      — base64-encoded grayscale PNG (disparity: brighter = closer)
+      image          — base64-encoded RGB JPEG at the same resolution
+
+    The frontend uses both images to build a coloured 3-D point cloud that the user
+    can orbit with mouse/touch to explore different shooting angles.
+    """
+    if file.content_type not in _ALLOWED_TYPES:
+        raise HTTPException(400, f"File must be JPEG or PNG, got {file.content_type!r}")
+    content = await file.read()
+    if len(content) > _MAX_SIZE:
+        raise HTTPException(400, "File exceeds 20 MB limit")
+
+    logger.info("POST /depth  file=%s  size=%.1f KB", file.filename, len(content) / 1024)
+    suffix = ".jpg" if file.content_type == "image/jpeg" else ".png"
+    loop = asyncio.get_running_loop()
+
+    try:
+        with tempfile.NamedTemporaryFile(suffix=suffix, delete=False) as tmp:
+            tmp.write(content)
+            tmp_path = Path(tmp.name)
+        try:
+            from PIL import Image as PILImage
+
+            pil_image = PILImage.open(tmp_path).convert("RGB")
+            from src.analysis.depth import estimate_depth
+
+            result = await loop.run_in_executor(None, estimate_depth, pil_image)
+        finally:
+            tmp_path.unlink(missing_ok=True)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(500, str(exc)) from exc
+
+    return result
+
+
 @app.post("/analyse")
 async def analyse(
     file: UploadFile = File(...),

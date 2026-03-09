@@ -1,4 +1,4 @@
-import type { AnalyseResponse, AnalyseStreamEvent, CompositionScores, ExifData, QualityTier, TechnicalScores } from '@/types/api'
+import type { AnalyseResponse, AnalyseStreamEvent, CompositionScores, DepthResult, ExifData, QualityTier, TechnicalScores } from '@/types/api'
 
 export const API_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:8000'
 
@@ -84,6 +84,18 @@ export async function analyseImageStream(
       }
     }
   }
+}
+
+export async function fetchDepth(file: File): Promise<DepthResult> {
+  const form = new FormData()
+  form.append('file', file)
+
+  const res = await fetch(`${API_URL}/depth`, { method: 'POST', body: form })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({ detail: 'Unknown error' }))
+    throw new Error(body.detail ?? `Depth request failed with status ${res.status}`)
+  }
+  return res.json() as Promise<DepthResult>
 }
 
 export async function checkHealth(): Promise<boolean> {
